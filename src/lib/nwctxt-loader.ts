@@ -33,11 +33,15 @@ import { nextNoteId } from './types/project';
 
 const PPQ = 480;
 
+// NWC 가 ClipText export 시 실제로 쓰는 명칭은 "4th"/"8th" 류 — Whole/Half/Quarter/Eighth
+// 명칭은 alias 로 동시 매핑.
 const DURATION_BASE: Record<string, number> = {
   Whole: 4 * PPQ,
   Half: 2 * PPQ,
   Quarter: PPQ,
+  '4th': PPQ,
   Eighth: PPQ / 2,
+  '8th': PPQ / 2,
   '16th': PPQ / 4,
   '32nd': PPQ / 8,
   '64th': PPQ / 16,
@@ -84,14 +88,16 @@ function midiFromLetter(letter: Letter, octave: number): number {
 }
 
 /**
- * NWC Pos 토큰 — 정수 + 옵션 accidental 후행자.
- * 예: "1" / "-2" / "1#" / "3b" / "5n" / "1x" (double sharp) / "1v" (double flat)
+ * NWC Pos 토큰 — **prefix** accidental + signed integer + 옵션 notehead/tied 후행자.
+ * 예: "6" / "-2" / "#6" / "b3" / "n5" / "x6" (double sharp) / "v3" (double flat)
+ *     "5o" (open notehead) / "5^" (tied)
  */
 function parsePosToken(tok: string): { pos: number; accidental: number; isNatural: boolean } {
-  const m = /^(-?\d+)([#bnxv]?)$/.exec(tok.trim());
+  // [accidental?] [signed pos] [notehead?] [tied?]
+  const m = /^([#bnxv]?)(-?\d+)[oxXzyYabcdefghijklmnpqrstuvw]?\^?$/.exec(tok.trim());
   if (!m) return { pos: 0, accidental: 0, isNatural: false };
-  const pos = parseInt(m[1], 10);
-  const acc = m[2];
+  const acc = m[1];
+  const pos = parseInt(m[2], 10);
   if (acc === '#') return { pos, accidental: 1, isNatural: false };
   if (acc === 'b') return { pos, accidental: -1, isNatural: false };
   if (acc === 'n') return { pos, accidental: 0, isNatural: true };
@@ -197,6 +203,7 @@ export function loadNwctxtFromText(
   }
 
   let bpm = 120;
+  let bpmSet = false;
   let timeSig = '4/4';
   let title = '(이름 없음)';
 
@@ -259,9 +266,14 @@ export function loadNwctxtFromText(
         break;
 
       case 'Tempo':
-        if (props.Tempo) {
+        // 첫 번째 Tempo 만 사용 — NWC 가 곡 안에 여러 |Tempo| 라인을 둘 수 있음
+        // (Pos: 위치별 변동). M7/M8 후 멀티 tempo 처리 따로.
+        if (!bpmSet && props.Tempo) {
           const t = parseFloat(props.Tempo);
-          if (Number.isFinite(t)) bpm = t;
+          if (Number.isFinite(t)) {
+            bpm = t;
+            bpmSet = true;
+          }
         }
         break;
 
@@ -374,8 +386,15 @@ export function loadNwctxtFromText(
     throw new Error('NWC 파일에 staff 가 없습니다');
   }
 
+  // 빈 staff (Tempo / Conductor 등 메타만 있는 staff) 필터링
+  const meaningfulStaves = staves.filter((s) => s.notes.length > 0);
+  if (meaningfulStaves.length === 0 && staves.length > 0) {
+    // 모든 staff 가 빈 경우 — 적어도 첫 staff 는 보존
+    meaningfulStaves.push(staves[0]);
+  }
+
   // ProjectState 조립
-  const tracks: Track[] = staves.map((s, i) => ({
+  const tracks: Track[] = meaningfulStaves.map((s, i) => ({
     id: `track-${i}`,
     name: s.name,
     kind: 'note',

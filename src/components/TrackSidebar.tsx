@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { Track } from '@/lib/types/project';
-import { getGmName, parseInstrumentId } from '@/lib/gm-instruments';
+import { getGmName, parseInstrumentId, GM_INSTRUMENT_NAMES } from '@/lib/gm-instruments';
 
 const TRACK_COLORS = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b',
@@ -20,6 +20,8 @@ type Props = {
   /** 펼친 상태 폭 (px). 드래그로 조정 가능. */
   width: number;
   onWidthChange: (px: number) => void;
+  /** 트랙별 GM program 변경 — NWC ClipText 등 instrument 정보 누락 케이스 보완. */
+  onTrackInstrumentChange?: (trackIndex: number, programNumber: number) => void;
 };
 
 const MIN_WIDTH = 180;
@@ -35,6 +37,7 @@ export default function TrackSidebar({
   onToggleCollapsed,
   width,
   onWidthChange,
+  onTrackInstrumentChange,
 }: Props) {
   // 우측 가장자리 드래그로 폭 조정 (펼친 상태에서만)
   const handleResizeMouseDown = (e: React.MouseEvent) => {
@@ -192,9 +195,32 @@ export default function TrackSidebar({
                     <div className="text-[10px] text-gray-500 truncate">
                       {t.notes?.length ?? 0} notes · ch {t.channel + 1}
                     </div>
-                    <div className="text-[10px] text-gray-600 truncate" title={instLabel}>
-                      {instLabel}
-                    </div>
+                    {isPercussion ? (
+                      <div className="text-[10px] text-gray-600 truncate" title={instLabel}>
+                        {instLabel}
+                      </div>
+                    ) : onTrackInstrumentChange ? (
+                      <select
+                        value={programNum >= 0 ? programNum : 0}
+                        onChange={(e) => {
+                          onTrackInstrumentChange(i, Number(e.target.value));
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className="text-[10px] text-gray-700 bg-transparent border-0 px-0 py-0 w-full truncate cursor-pointer hover:text-blue-700 focus:outline-none focus:bg-white focus:border focus:rounded"
+                        title="GM 악기 변경"
+                      >
+                        {GM_INSTRUMENT_NAMES.map((name, n) => (
+                          <option key={n} value={n}>
+                            {n}: {name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="text-[10px] text-gray-600 truncate" title={instLabel}>
+                        {instLabel}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

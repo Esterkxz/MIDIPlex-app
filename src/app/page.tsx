@@ -211,6 +211,18 @@ export default function Home() {
     }
   };
 
+  const handleTrackInstrumentChange = (trackIndex: number, programNumber: number) => {
+    if (!project) return;
+    const next: ProjectState = {
+      ...project,
+      tracks: project.tracks.map((t, i) =>
+        i === trackIndex ? { ...t, instrumentId: `instrument-${programNumber}` } : t,
+      ),
+      modifiedAt: new Date().toISOString(),
+    };
+    handleProjectChange(next);
+  };
+
   const handleReset = () => {
     if (!initialProject || !project) return;
     if (project === initialProject) return;
@@ -358,6 +370,7 @@ export default function Home() {
               onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
               width={sidebarWidth}
               onWidthChange={setSidebarWidth}
+              onTrackInstrumentChange={handleTrackInstrumentChange}
             />
             <section className="flex-1 min-w-0 p-2 flex flex-col">
               <PianoRoll
