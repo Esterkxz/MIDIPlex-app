@@ -373,10 +373,11 @@ function parseV1Staff(
   let realTokens = tokensCount;
   if (version >= 1.7) realTokens -= 2;
 
+  // NWC channel byte 는 0-based (사용자 페어 검증 — staff 0 byte=1 → MIDI ch2)
   const staff: V1Staff = {
     name: staff_name,
     group: group_name,
-    channel: Math.max(0, channel - 1),
+    channel: Math.max(0, Math.min(15, channel)),
     staff_type,
     programNumber: 0,
     programSet: false,
@@ -388,6 +389,9 @@ function parseV1Staff(
     clef: CLEF_NAMES[staff_type] ?? 'Treble',
     clefOctaveShift: 0,
   };
+  console.log(
+    `[v1-parser.Staff] "${staff_name}" channel byte=${channel} → display ch${staff.channel + 1}`,
+  );
 
   for (let i = 0; i < realTokens; i++) {
     if (version === 1.7) reader.skip(2);
@@ -518,16 +522,15 @@ function parseBarlineToken(reader: Reader, staff: V1Staff) {
 
 function parseInstrumentPatchToken(reader: Reader, staff: V1Staff) {
   const data = reader.readBytes(8);
-  // 진단 로그 — 사용자 페어로 어느 byte 가 patch 인지 발견
   console.log(
     `[v1-parser.InstrumentPatch] staff="${staff.name}" data: ${[...data].map(b => b.toString(16).padStart(2, '0')).join(' ')}`,
   );
-  // 후보 우선순위: data[0~7] 중 0~127 범위에 있고 staff.programSet=false 면 채택
-  // 가장 likely: data[0] 또는 data[2]
+  // NWC InstrumentPatch byte 는 1-based GM (사용자 페어 검증 — byte 1 → Acoustic Grand
+  // Piano (GM 0), byte 49 → String Ensemble 1 (GM 48)). 즉 MIDI prog = byte - 1.
   if (!staff.programSet) {
     for (const candidate of [data[0], data[2], data[4], data[6]]) {
-      if (candidate >= 0 && candidate <= 127 && candidate !== 0) {
-        staff.programNumber = candidate;
+      if (candidate >= 1 && candidate <= 128) {
+        staff.programNumber = candidate - 1;
         staff.programSet = true;
         break;
       }
