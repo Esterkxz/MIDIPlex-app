@@ -28,6 +28,7 @@ export default function Home() {
   const [mode, setMode] = useState<'oscillator' | 'spessasynth'>('oscillator');
   const [activeTrack, setActiveTrack] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [visibleTracks, setVisibleTracks] = useState<Set<number>>(new Set());
 
   // Undo / Redo / Reset 히스토리 — 파일 로드 시점 = initial. 편집마다 past 에 push, future 비움.
   const [initialProject, setInitialProject] = useState<ProjectState | null>(null);
@@ -125,6 +126,8 @@ export default function Home() {
     // 활성 트랙: 첫 노트 트랙
     const firstWithNotes = loadedProject.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
     setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
+    // 모든 트랙 visible 로 초기화
+    setVisibleTracks(new Set(loadedProject.tracks.map((_, i) => i)));
     // 히스토리 초기화 — initial = 로드 시점
     setInitialProject(loadedProject);
     setPast([]);
@@ -324,6 +327,8 @@ export default function Home() {
               tracks={project.tracks}
               activeIndex={activeTrack}
               onActiveChange={setActiveTrack}
+              visibleTracks={visibleTracks}
+              onVisibleChange={setVisibleTracks}
               collapsed={sidebarCollapsed}
               onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
             />
@@ -334,6 +339,7 @@ export default function Home() {
                 onProjectChange={handleProjectChange}
                 onPreviewNote={(midi, velocity, channel) => engine.previewNote(midi, velocity, channel)}
                 activeTrack={activeTrack}
+                visibleTracks={visibleTracks}
               />
             </section>
           </div>

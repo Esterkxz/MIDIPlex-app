@@ -12,6 +12,8 @@ type Props = {
   onPreviewNote?: (midi: number, velocity?: number, channel?: number) => void;
   /** 활성 트랙 — 연필 모드에서 신규 노트 들어갈 트랙. 사이드바가 owner. */
   activeTrack?: number;
+  /** 노트 표시할 트랙 인덱스 set. 미전달 시 모두 표시. */
+  visibleTracks?: Set<number>;
 };
 
 type Tool = 'select' | 'pencil' | 'eraser';
@@ -84,7 +86,10 @@ export default function PianoRoll({
   onProjectChange,
   onPreviewNote,
   activeTrack: activeTrackProp,
+  visibleTracks,
 }: Props) {
+  const isVisible = (trackIndex: number) =>
+    visibleTracks ? visibleTracks.has(trackIndex) : true;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -201,11 +206,12 @@ export default function PianoRoll({
     [scrollY, pitchHeight, rollY0, rollH],
   );
 
-  // hit-test (top-most first)
+  // hit-test (top-most first) — 숨김 트랙 노트는 클릭 불가
   const hitTestNote = useCallback(
     (cssX: number, cssY: number): FlatNote | null => {
       for (let i = allNotes.length - 1; i >= 0; i--) {
         const n = allNotes[i];
+        if (!isVisible(n.trackIndex)) continue;
         const ns = noteToSec(n.tick);
         const nd = noteToSec(n.durationTicks);
         const ne = ns + nd;
@@ -219,7 +225,8 @@ export default function PianoRoll({
       }
       return null;
     },
-    [allNotes, noteToSec, scrollX, scrollY, xScale, pitchHeight, rollX0, rollY0, rollH],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allNotes, noteToSec, scrollX, scrollY, xScale, pitchHeight, rollX0, rollY0, rollH, visibleTracks],
   );
 
   // ----- 그리기 -----
@@ -292,10 +299,11 @@ export default function PianoRoll({
       moveDeltaMidi = -Math.round(dy / pitchHeight);
     }
 
-    // 노트 (viewport culling)
+    // 노트 (viewport culling + 트랙 visibility culling)
     const tEnd = scrollX + visibleSec;
     const pEnd = scrollY + visiblePitches + 1;
     for (const note of allNotes) {
+      if (!isVisible(note.trackIndex)) continue;
       const isSel = selection.has(note.id);
       // move preview 적용
       let drawTick = note.tick;
@@ -382,7 +390,7 @@ export default function PianoRoll({
     ctx.lineTo(KEY_LABEL_PX, rollY0 + rollH);
     ctx.stroke();
   }, [
-    allNotes, selection, dragState,
+    allNotes, selection, dragState, visibleTracks,
     project.ppq, project.bpm, snapDenom,
     currentTime, totalDuration,
     containerSize.w, containerSize.h,
@@ -553,6 +561,7 @@ export default function PianoRoll({
       const y1 = Math.max(dragState.startY, dragState.currentY);
       const newSel = dragState.additive ? new Set(selection) : new Set<string>();
       for (const n of allNotes) {
+        if (!isVisible(n.trackIndex)) continue;
         const ns = noteToSec(n.tick);
         const nd = noteToSec(n.durationTicks);
         const ne = ns + nd;
