@@ -2,6 +2,7 @@ import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
 import { WorkletSynthesizer, Sequencer } from 'spessasynth_lib';
 import type { ProjectState } from './types/project';
+import { projectToSmfBuffer } from './midi-export';
 
 /**
  * MIDIPlex 오디오 엔진 (Phase 2 MVP).
@@ -51,91 +52,20 @@ export class AudioEngine {
    * Sequencer 가 재생 중일 때 호출하면 stop 후 reload (끊김 발생 정상).
    */
   applyProject(project: ProjectState) {
-    const baseJson =
-      this.midi
-        ? (this.midi.toJSON() as unknown as Record<string, unknown>)
-        : { header: {}, tracks: [] };
-
-    const tsMatch = /^(\d+)\/(\d+)$/.exec(project.timeSignature);
-    const ticksPerSec = (project.bpm * project.ppq) / 60;
-
-    const header = {
-      ...((baseJson.header as Record<string, unknown>) ?? {}),
-      name: project.title,
-      ppq: project.ppq,
-      tempos: [{ ticks: 0, bpm: project.bpm, time: 0 }],
-      timeSignatures: tsMatch
-        ? [
-            {
-              ticks: 0,
-              timeSignature: [parseInt(tsMatch[1], 10), parseInt(tsMatch[2], 10)],
-              measures: 0,
-            },
-          ]
-        : [],
-      keySignatures: ((baseJson.header as Record<string, unknown>)?.keySignatures as unknown[]) ?? [],
-      meta: ((baseJson.header as Record<string, unknown>)?.meta as unknown[]) ?? [],
-    };
-
-    const tracks = project.tracks.map((track) => {
-      const instMatch = /instrument-(\d+)/.exec(track.instrumentId ?? '');
-      const programNum = instMatch ? parseInt(instMatch[1], 10) : 0;
-      return {
-        name: track.name,
-        channel: track.channel,
-        instrument: {
-          number: programNum,
-          family: '',
-          name: '',
-          percussion: track.channel === 9,
-        },
-        notes: (track.notes ?? []).map((n) => ({
-          midi: n.midi,
-          ticks: n.tick,
-          durationTicks: n.durationTicks,
-          velocity: n.velocity,
-          time: n.tick / ticksPerSec,
-          duration: n.durationTicks / ticksPerSec,
-          name: '',
-          noteOffVelocity: 0,
-        })),
-        controlChanges: {},
-        pitchBends: [],
-        endOfTrackTicks: 0,
-      };
-    });
-
-    const newMidi = new Midi();
-    try {
-      (newMidi as unknown as { fromJSON: (j: unknown) => void }).fromJSON({ header, tracks });
-    } catch (e) {
-      console.warn('[AudioEngine.applyProject] fromJSON 실패:', e);
-      return;
-    }
-
     let buffer: ArrayBuffer;
     try {
-      const u8 = newMidi.toArray();
-      buffer = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+      buffer = projectToSmfBuffer(project);
     } catch (e) {
-      console.warn('[AudioEngine.applyProject] toArray 실패:', e);
+      console.warn('[AudioEngine.applyProject] SMF 직렬화 실패:', e);
       return;
     }
-
+    const newMidi = new Midi(buffer);
     const totalNotes = newMidi.tracks.reduce((s, t) => s + (t.notes?.length ?? 0), 0);
     console.log(
       `[AudioEngine.applyProject] mode=${this.mode} sf=${this.soundFontLoaded} ` +
         `tracks=${newMidi.tracks.length} notes=${totalNotes} ` +
         `ppq=${newMidi.header.ppq} bpm=${project.bpm} bytes=${buffer.byteLength}`,
     );
-    // 트랙별 노트 수 + 채널 + 악기 — 트랙 0 재생 누락 진단용
-    newMidi.tracks.forEach((t, i) => {
-      console.log(
-        `  [track ${i}] name="${t.name ?? ''}" ch=${t.channel ?? '?'} ` +
-          `prog=${t.instrument?.number ?? '?'} notes=${t.notes?.length ?? 0}`,
-      );
-    });
-
     this.midi = newMidi;
     this.midiBuffer = buffer;
     this.tryLoadIntoSequencer();

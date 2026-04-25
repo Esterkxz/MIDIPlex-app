@@ -9,6 +9,14 @@ import PianoRoll from '@/components/PianoRoll';
 import TrackSidebar from '@/components/TrackSidebar';
 import type { ProjectState } from '@/lib/types/project';
 import { AudioEngine } from '@/lib/audio-engine';
+import {
+  saveProject,
+  loadProject,
+  listProjects,
+  deleteProject,
+  type ProjectListEntry,
+} from '@/lib/storage/indexeddb-store';
+import { downloadSmf } from '@/lib/midi-export';
 
 const VOLUME_KEY = 'midiplex.volume';
 const SIDEBAR_KEY = 'midiplex.sidebar.collapsed';
@@ -40,9 +48,11 @@ export default function Home() {
   const HISTORY_LIMIT = 100;
 
   // 편집 여부 — 편집 없으면 재생 시 원본 buffer 그대로 사용 (SMF 재직렬화 우회).
-  // applyProject 의 fromJSON → toArray 가 트랙 0 의 노트를 conductor track 으로
-  // 흡수하는 등 spessasynth 재생이 미묘하게 달라질 수 있어 편집 시에만 호출.
   const [isDirty, setIsDirty] = useState(false);
+
+  // M7 IndexedDB 저장 상태
+  const [recentProjects, setRecentProjects] = useState<ProjectListEntry[]>([]);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   // ctx sampleRate 강제 (lesson 003)
   useEffect(() => {
@@ -211,6 +221,82 @@ export default function Home() {
     }
   };
 
+  // M7 — 자동저장 (debounce 5s, 편집 직후 트리거)
+  useEffect(() => {
+    if (!project || !isDirty) return;
+    const t = setTimeout(() => {
+      saveProject(project)
+        .then(() => {
+          setSavedAt(new Date().toISOString());
+          setIsDirty(false);
+          // 최근 목록 갱신
+          listProjects().then(setRecentProjects).catch(() => {});
+        })
+        .catch((e) => console.warn('[page] 자동저장 실패:', e));
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [project, isDirty]);
+
+  // 최초 hydration 시 + 새 곡 로드 후 최근 목록 fetch
+  useEffect(() => {
+    if (!hydrated) return;
+    listProjects().then(setRecentProjects).catch(() => {});
+  }, [hydrated, project?.id]);
+
+  const handleManualSave = async () => {
+    if (!project) return;
+    try {
+      await saveProject(project);
+      setSavedAt(new Date().toISOString());
+      setIsDirty(false);
+      const list = await listProjects();
+      setRecentProjects(list);
+    } catch (e) {
+      console.warn('[page] 수동저장 실패:', e);
+    }
+  };
+
+  const handleOpenSaved = async (id: string) => {
+    try {
+      const loaded = await loadProject(id);
+      if (!loaded) return;
+      engine.stop();
+      setMidi(null);
+      setProject(loaded);
+      try { engine.applyProject(loaded); } catch (e) { console.warn('[page] open applyProject:', e); }
+      setIsPlaying(false);
+      const firstWithNotes = loaded.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
+      setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
+      setVisibleTracks(new Set(loaded.tracks.map((_, i) => i)));
+      setInitialProject(loaded);
+      setPast([]);
+      setFuture([]);
+      setIsDirty(false);
+      setSavedAt(loaded.modifiedAt);
+    } catch (e) {
+      console.warn('[page] open 실패:', e);
+    }
+  };
+
+  const handleDeleteSaved = async (id: string) => {
+    try {
+      await deleteProject(id);
+      const list = await listProjects();
+      setRecentProjects(list);
+    } catch (e) {
+      console.warn('[page] delete 실패:', e);
+    }
+  };
+
+  const handleExportSmf = () => {
+    if (!project) return;
+    try {
+      downloadSmf(project, project.title);
+    } catch (e) {
+      console.warn('[page] SMF 내보내기 실패:', e);
+    }
+  };
+
   const handleTrackInstrumentChange = (trackIndex: number, programNumber: number) => {
     if (!project) return;
     const next: ProjectState = {
@@ -324,6 +410,65 @@ export default function Home() {
                 title="처음 상태로 (파일 로드 시점)"
               >
                 ⟲ 처음
+              </button>
+            </div>
+
+            <div className="flex gap-1 items-center text-xs">
+              <button
+                onClick={handleManualSave}
+                className="px-2 py-1 border rounded hover:bg-green-50 text-green-700"
+                title={savedAt ? `저장됨: ${new Date(savedAt).toLocaleTimeString()}` : '저장 (브라우저 IndexedDB)'}
+              >
+                💾 저장 {isDirty ? '*' : ''}
+              </button>
+
+              <details className="relative">
+                <summary className="cursor-pointer px-2 py-1 border rounded hover:bg-gray-50 list-none">
+                  📁 열기 ({recentProjects.length})
+                </summary>
+                <div className="absolute right-0 top-full mt-1 bg-white border rounded shadow-lg z-20 min-w-[280px] max-h-[400px] overflow-y-auto">
+                  {recentProjects.length === 0 ? (
+                    <div className="text-xs text-gray-400 px-3 py-3">저장된 작업 없음</div>
+                  ) : (
+                    <ul>
+                      {recentProjects.map((entry) => (
+                        <li key={entry.id} className="border-b last:border-b-0 hover:bg-gray-50">
+                          <div className="flex items-center gap-2 px-3 py-2">
+                            <button
+                              onClick={() => handleOpenSaved(entry.id)}
+                              className="flex-1 text-left min-w-0"
+                            >
+                              <div className="text-xs font-medium text-gray-800 truncate">
+                                {entry.title}
+                              </div>
+                              <div className="text-[10px] text-gray-500 truncate">
+                                {entry.trackCount} 트랙 · {entry.noteCount} 노트 · {entry.durationSeconds.toFixed(1)}s
+                              </div>
+                              <div className="text-[10px] text-gray-400">
+                                {new Date(entry.modifiedAt).toLocaleString()}
+                              </div>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSaved(entry.id)}
+                              className="text-xs text-red-500 hover:text-red-700 px-1"
+                              title="삭제"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </details>
+
+              <button
+                onClick={handleExportSmf}
+                className="px-2 py-1 border rounded hover:bg-blue-50 text-blue-700"
+                title=".mid 파일로 다운로드"
+              >
+                ⬇ .mid
               </button>
             </div>
 
