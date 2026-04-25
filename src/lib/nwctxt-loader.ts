@@ -183,7 +183,14 @@ interface StaffState {
   programSet: boolean;
   /** 명시 채널이 없으면 staff index */
   channel: number;
+  /** Dynamic level (ppp~fff) 별 velocity 매핑 — |StaffInstrument|DynVel: 에서 추출 */
+  dynVel: number[];
+  /** 현재 다이내믹의 노트 velocity (0~1) — |Dynamic|Style: 가 변경 */
+  currentVelocity: number;
 }
+
+const DYNAMIC_LEVELS = ['ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff'] as const;
+const DEFAULT_DYNVEL = [10, 30, 45, 60, 75, 92, 108, 127];
 
 function makeStaffState(name: string, channel: number): StaffState {
   return {
@@ -198,6 +205,8 @@ function makeStaffState(name: string, channel: number): StaffState {
     programNumber: 0,
     programSet: false,
     channel,
+    dynVel: [...DEFAULT_DYNVEL],
+    currentVelocity: 75 / 127, // mf default
   };
 }
 
@@ -255,8 +264,26 @@ export function loadNwctxtFromText(
             currentStaff.programSet = true;
           }
         }
+        if (currentStaff && props.DynVel) {
+          // 8 단계 velocity (ppp~fff) — 사용자 정의, 기본 [10,30,45,60,75,92,108,127]
+          const arr = props.DynVel.split(',').map((s) => parseInt(s.trim(), 10));
+          if (arr.length === 8 && arr.every((x) => Number.isFinite(x))) {
+            currentStaff.dynVel = arr;
+          }
+        }
         if (currentStaff && props.Trans && props.Trans !== '0') {
           warnings.push(`StaffInstrument Trans 무시됨 (${currentStaff.name}: ${props.Trans})`);
+        }
+        break;
+
+      case 'Dynamic':
+        // |Dynamic|Style:ff|Pos:-8 — Style 이 다이내믹 레벨, DynVel[index] 가 velocity
+        if (currentStaff && props.Style) {
+          const idx = (DYNAMIC_LEVELS as readonly string[]).indexOf(props.Style);
+          if (idx >= 0) {
+            const vel = currentStaff.dynVel[idx] ?? 75;
+            currentStaff.currentVelocity = Math.max(0, Math.min(1, vel / 127));
+          }
         }
         break;
 
@@ -344,7 +371,7 @@ export function loadNwctxtFromText(
           tick: currentStaff.currentTick,
           durationTicks: noteDur,
           midi: Math.max(0, Math.min(127, midi)),
-          velocity: 0.7,
+          velocity: currentStaff.currentVelocity,
         });
         if (!isGrace) currentStaff.currentTick += ticks;
         break;

@@ -120,6 +120,8 @@ interface V1Staff {
   /** 현재 클레프 (token Clef 가 변경) */
   clef: string;
   clefOctaveShift: number;
+  /** 현재 다이내믹 노트 velocity (0~1) — Dynamic token 이 변경 */
+  currentVelocity: number;
 }
 
 // ============================================================================
@@ -388,6 +390,7 @@ function parseV1Staff(
     keyFlats: new Set(),
     clef: CLEF_NAMES[staff_type] ?? 'Treble',
     clefOctaveShift: 0,
+    currentVelocity: 75 / 127, // mf default
   };
   console.log(
     `[v1-parser.Staff] "${staff_name}" channel byte=${channel} → display ch${staff.channel + 1}`,
@@ -447,7 +450,7 @@ function parseV1Token(
       parseTempoToken(reader, globalBpm);
       return;
     case 7: // Dynamic
-      skipDynamic(reader, version);
+      parseDynamicToken(reader, staff, version);
       return;
     case 8: // Note
       parseNoteToken(reader, staff, version);
@@ -559,17 +562,25 @@ function parseTempoToken(reader: Reader, globalBpm: { value: number; set: boolea
   }
 }
 
-function skipDynamic(reader: Reader, version: number) {
-  if (version < 1.7) {
+function parseDynamicToken(reader: Reader, staff: V1Staff, version: number) {
+  // zz85 spec:
+  //   1.7+: position(byte) placement(byte) style(byte) velocity(short) volume(short)
+  //   1.5: placement(byte) position(byte) velocity(short) volume(short) — style = placement & 0x07
+  let velocity = 0;
+  if (version >= 1.7) {
+    reader.readByte(); // position
+    reader.readByte(); // placement
     reader.readByte(); // style
-    reader.readShort(); // velocity
+    velocity = reader.readShort();
     reader.readShort(); // volume
   } else {
-    reader.readByte(); // placement
+    reader.readByte(); // placement (style 포함)
     reader.readByte(); // position
-    reader.readShort(); // velocity
+    velocity = reader.readShort();
     reader.readShort(); // volume
-    reader.readByte(); // style
+  }
+  if (velocity > 0 && velocity <= 127) {
+    staff.currentVelocity = velocity / 127;
   }
 }
 
@@ -709,7 +720,7 @@ function appendNoteFromData(data: Uint8Array, staff: V1Staff) {
     tick: staff.currentTick,
     durationTicks: noteDur,
     midi: Math.max(0, Math.min(127, midi)),
-    velocity: 0.7,
+    velocity: staff.currentVelocity,
   });
   if (!isGrace) staff.currentTick += ticks;
 }
