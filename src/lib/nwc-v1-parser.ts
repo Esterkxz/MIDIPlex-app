@@ -109,6 +109,7 @@ interface V1Staff {
   channel: number;
   staff_type: number; // 0=Treble, 1=Bass, ...
   programNumber: number;
+  programSet: boolean;
   notes: Note[];
   currentTick: number;
   /** 마디 컨텍스트 임시 accidental (letter+octave → ±1/±2/0) */
@@ -163,11 +164,11 @@ export function parseV1Binary(
 
   // ---- 5. StaffInfo loop
   const staves: V1Staff[] = [];
-  let bpm = 120;
+  const globalBpm = { value: 120, set: false };
   let timeSig = '4/4';
   for (let i = 0; i < staveCount; i++) {
     try {
-      const s = parseV1Staff(reader, header.version, warnings);
+      const s = parseV1Staff(reader, header.version, warnings, globalBpm);
       staves.push(s);
       if (s.notes.length > 0) {
         console.log(
@@ -198,7 +199,9 @@ export function parseV1Binary(
   }));
 
   const totalTicks = Math.max(0, ...staves.map((s) => s.currentTick));
-  const durationSeconds = (totalTicks / PPQ) * (60 / bpm);
+  const finalBpm = globalBpm.value;
+  const durationSeconds = (totalTicks / PPQ) * (60 / finalBpm);
+  console.log(`[nwc-v1-parser] global bpm=${finalBpm} (set=${globalBpm.set})`);
 
   const project: ProjectState = {
     id: cryptoRandomId(),
@@ -206,7 +209,7 @@ export function parseV1Binary(
     ppq: PPQ,
     timeSignature: timeSig,
     keySignature: 'C major',
-    bpm,
+    bpm: finalBpm,
     durationSeconds,
     instruments: [],
     tracks,
@@ -309,7 +312,12 @@ function parseV1ScoreHeader(reader: Reader, version: number): number {
   }
 }
 
-function parseV1Staff(reader: Reader, version: number, warnings: string[]): V1Staff {
+function parseV1Staff(
+  reader: Reader,
+  version: number,
+  warnings: string[],
+  globalBpm: { value: number; set: boolean },
+): V1Staff {
   if (version > 2) {
     reader.readShort();
     reader.readShort();
@@ -371,6 +379,7 @@ function parseV1Staff(reader: Reader, version: number, warnings: string[]): V1St
     channel: Math.max(0, channel - 1),
     staff_type,
     programNumber: 0,
+    programSet: false,
     notes: [],
     currentTick: 0,
     measureAccidentals: new Map(),
@@ -386,7 +395,7 @@ function parseV1Staff(reader: Reader, version: number, warnings: string[]): V1St
     if (version < 1.7) reader.skip(1);
     else reader.skip(2);
 
-    parseV1Token(reader, tokenByte, staff, version, warnings);
+    parseV1Token(reader, tokenByte, staff, version, warnings, globalBpm);
   }
 
   return staff;
@@ -409,6 +418,7 @@ function parseV1Token(
   staff: V1Staff,
   version: number,
   warnings: string[],
+  globalBpm: { value: number; set: boolean },
 ) {
   switch (tokenByte) {
     case 0: // Clef
@@ -424,10 +434,13 @@ function parseV1Token(
       parseInstrumentPatchToken(reader, staff);
       return;
     case 5: // TimeSignature
-      reader.readBytes(8);
+      // 6 byte: top(short) + denomShift(short) + skip 2
+      reader.readShort();
+      reader.readShort();
+      reader.readShort();
       return;
     case 6: // Tempo
-      reader.readBytes(8); // walking 으로 무시 — bpm 는 외부에서
+      parseTempoToken(reader, globalBpm);
       return;
     case 7: // Dynamic
       skipDynamic(reader, version);
@@ -505,9 +518,41 @@ function parseBarlineToken(reader: Reader, staff: V1Staff) {
 
 function parseInstrumentPatchToken(reader: Reader, staff: V1Staff) {
   const data = reader.readBytes(8);
-  // patch number 가 어느 byte 인지 spec 미상 — 일단 data[0] 추정 (보통 GM 0~127)
-  if (data[0] >= 0 && data[0] <= 127 && staff.programNumber === 0) {
-    staff.programNumber = data[0];
+  // 진단 로그 — 사용자 페어로 어느 byte 가 patch 인지 발견
+  console.log(
+    `[v1-parser.InstrumentPatch] staff="${staff.name}" data: ${[...data].map(b => b.toString(16).padStart(2, '0')).join(' ')}`,
+  );
+  // 후보 우선순위: data[0~7] 중 0~127 범위에 있고 staff.programSet=false 면 채택
+  // 가장 likely: data[0] 또는 data[2]
+  if (!staff.programSet) {
+    for (const candidate of [data[0], data[2], data[4], data[6]]) {
+      if (candidate >= 0 && candidate <= 127 && candidate !== 0) {
+        staff.programNumber = candidate;
+        staff.programSet = true;
+        break;
+      }
+    }
+  }
+}
+
+function parseTempoToken(reader: Reader, globalBpm: { value: number; set: boolean }) {
+  // Tempo (5 byte fixed + zero-terminated string):
+  //   position (signed byte 1)
+  //   placement (signed byte 1)
+  //   duration (short 2)  ← BPM 값 (Quarter base 가정)
+  //   note (byte 1)       ← TempoBase index
+  //   text (zero-terminated)
+  reader.readByte(); // position
+  reader.readByte(); // placement
+  const duration = reader.readShort();
+  reader.readByte(); // note (base)
+  // text label
+  while (reader.pos < reader.buf.length && reader.buf[reader.pos] !== 0) reader.skip(1);
+  if (reader.pos < reader.buf.length) reader.skip(1); // skip terminating NUL
+  if (!globalBpm.set && duration > 0 && duration < 500) {
+    globalBpm.value = duration;
+    globalBpm.set = true;
+    console.log(`[v1-parser.Tempo] BPM = ${duration}`);
   }
 }
 
