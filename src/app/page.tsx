@@ -16,7 +16,7 @@ import {
   deleteProject,
   type ProjectListEntry,
 } from '@/lib/storage/indexeddb-store';
-import { downloadSmf } from '@/lib/midi-export';
+import { downloadSmf, projectToSmfBuffer } from '@/lib/midi-export';
 
 const VOLUME_KEY = 'midiplex.volume';
 const SIDEBAR_KEY = 'midiplex.sidebar.collapsed';
@@ -258,20 +258,22 @@ export default function Home() {
 
   const handleOpenSaved = async (id: string) => {
     try {
+      console.log('[page] open IndexedDB project:', id);
       const loaded = await loadProject(id);
-      if (!loaded) return;
-      engine.stop();
-      setMidi(null);
-      setProject(loaded);
-      try { engine.applyProject(loaded); } catch (e) { console.warn('[page] open applyProject:', e); }
-      setIsPlaying(false);
-      const firstWithNotes = loaded.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
-      setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
-      setVisibleTracks(new Set(loaded.tracks.map((_, i) => i)));
-      setInitialProject(loaded);
-      setPast([]);
-      setFuture([]);
-      setIsDirty(false);
+      if (!loaded) {
+        console.warn('[page] open: project not found:', id);
+        return;
+      }
+      console.log(
+        `[page] loaded: title="${loaded.title}" tracks=${loaded.tracks.length} ` +
+          `notes=${loaded.tracks.reduce((s, t) => s + (t.notes?.length ?? 0), 0)} ` +
+          `ppq=${loaded.ppq} bpm=${loaded.bpm} duration=${loaded.durationSeconds}s`,
+      );
+      // handleMidiLoaded 와 동일 흐름 — SMF 재직렬화 후 Midi 객체 만들어 engine.loadMidi 사용
+      const buffer = projectToSmfBuffer(loaded);
+      const midi = new Midi(buffer);
+      handleMidiLoaded(loaded, midi, buffer, `${loaded.title}.mid`);
+      // handleMidiLoaded 가 setIsDirty(false) 함 — 이후 추가 정리만
       setSavedAt(loaded.modifiedAt);
     } catch (e) {
       console.warn('[page] open 실패:', e);
