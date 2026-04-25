@@ -58,7 +58,7 @@ const TRACK_COLORS = [
 const MIN_X_SCALE = 5;
 const MAX_X_SCALE = 1500;
 const MIN_PITCH_HEIGHT = 2;
-const MAX_PITCH_HEIGHT = 40;
+const MAX_PITCH_HEIGHT = 120; // 한 옥타브가 1440px 까지 — 좁은 음역 곡 자동 fit + 여유
 
 const DEFAULT_X_SCALE = 80;
 const DEFAULT_PITCH_HEIGHT = 8;
@@ -134,18 +134,24 @@ export default function PianoRoll({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
-  // 자동 fit — 새 곡 로드 + 컨테이너 측정 후 한 번 실행. 곡 전체가 가로 100%, 피치가 세로 95% 차지.
+  // 자동 fit — 새 곡 로드 + 컨테이너 측정 안정 후 한 번 실행.
+  //   시간축: 곡 전체가 가로 100% 차지 (MIN/MAX cap 만 적용)
+  //   피치축: 모든 노트가 보이면서 최대한 확대 — 세로 95% 차지하도록 cap 없이 계산
+  // 컨테이너 측정값이 너무 작으면 (mount 직후 layout 미완) 무시하고 다음 ResizeObserver
+  // 콜백을 기다림.
   useEffect(() => {
     if (autoFitDone) return;
-    if (containerSize.w <= 0 || containerSize.h <= 0) return;
+    if (containerSize.w < 200 || containerSize.h < 200) return;
     if (allNotes.length === 0) return;
     const w = containerSize.w - KEY_LABEL_PX;
     const fitX = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, w / totalDuration));
     setXScale(fitX);
     setScrollX(0);
-    const pitchRange = Math.max(maxPitch - minPitch + 4, 12);
+    // pitch padding: 위아래 2 키씩 (총 4). pitchRange 가 너무 좁아도 그대로 — fitPH 가 커질 뿐.
+    const pitchRange = Math.max(maxPitch - minPitch + 4, 1);
     const targetH = (containerSize.h - HEADER_PX) * 0.95;
-    const fitPH = Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, targetH / pitchRange));
+    // MAX_PITCH_HEIGHT cap 적용 안 함 — 좁은 음역 곡은 한 키가 크게 그려지는 게 맞음
+    const fitPH = Math.max(MIN_PITCH_HEIGHT, targetH / pitchRange);
     setPitchHeight(fitPH);
     setScrollY(Math.max(0, minPitch - 2));
     setAutoFitDone(true);
@@ -655,8 +661,9 @@ export default function PianoRoll({
     const w = containerSize.w - KEY_LABEL_PX;
     setXScale(Math.max(MIN_X_SCALE, w / totalDuration));
     setScrollX(0);
-    const visiblePitches = Math.max(maxPitch - minPitch + 4, 12);
-    setPitchHeight(Math.max(MIN_PITCH_HEIGHT, (containerSize.h - HEADER_PX) / visiblePitches));
+    const pitchRange = Math.max(maxPitch - minPitch + 4, 1);
+    const targetH = (containerSize.h - HEADER_PX) * 0.95;
+    setPitchHeight(Math.max(MIN_PITCH_HEIGHT, targetH / pitchRange));
     setScrollY(Math.max(0, minPitch - 2));
     setAutoFollow(true);
   };
