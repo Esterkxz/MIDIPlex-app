@@ -1,0 +1,26 @@
+MIDIPlex-app
+Copyright 2026 Esterkxz / MIDIPlex contributors
+
+This product includes software developed by:
+- spessasynth_lib + spessasynth_core (Apache-2.0) — https://github.com/spessasus/spessasynth_lib
+- @tonejs/midi (MIT) — https://github.com/Tonejs/Midi
+- tone (MIT) — https://github.com/Tonejs/Tone.js
+- Next.js (MIT) — https://github.com/vercel/next.js
+- React (MIT) — https://github.com/facebook/react
+
+License layering:
+- Repo top-level: Apache 2.0 (LICENSE)
+- src/ and tests/: MIT (LICENSE-MIT)
+- spec/: CC BY 4.0 (LICENSE-CC-BY-4.0)
+- public/sf/ (when default soundfonts are bundled): per-file licenses
+  (each soundfont retains its original license, see public/sf/README.md
+  when populated)
+
+Sound fonts (when bundled in public/sf/):
+- (Phase C 시점에 채워질 예정 — GeneralUser GS 등 free-with-attribution SF)
+- 각 SF 파일별 라이선스는 public/sf/&lt;name&gt;/LICENSE 또는 README 에 명시
+- Apache 2.0 의 일부가 아니며 별도 NOTICE 가 필요한 경우 본 NOTICE 에 추가
+
+Spec (MPX / MPK / SFW):
+- 본 repo 의 spec/ 폴더에 v0.1 DRAFT 단계로 위치
+- v1.0 spec freeze 후 별도 repo (Esterkxz/MIDIPlex-formats) 로 분리 예정 (ADR 0004 단계 2)
