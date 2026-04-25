@@ -128,6 +128,13 @@ export class AudioEngine {
         `tracks=${newMidi.tracks.length} notes=${totalNotes} ` +
         `ppq=${newMidi.header.ppq} bpm=${project.bpm} bytes=${buffer.byteLength}`,
     );
+    // 트랙별 노트 수 + 채널 + 악기 — 트랙 0 재생 누락 진단용
+    newMidi.tracks.forEach((t, i) => {
+      console.log(
+        `  [track ${i}] name="${t.name ?? ''}" ch=${t.channel ?? '?'} ` +
+          `prog=${t.instrument?.number ?? '?'} notes=${t.notes?.length ?? 0}`,
+      );
+    });
 
     this.midi = newMidi;
     this.midiBuffer = buffer;

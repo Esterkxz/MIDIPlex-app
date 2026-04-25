@@ -35,6 +35,11 @@ export default function Home() {
   const [future, setFuture] = useState<ProjectState[]>([]);
   const HISTORY_LIMIT = 100;
 
+  // 편집 여부 — 편집 없으면 재생 시 원본 buffer 그대로 사용 (SMF 재직렬화 우회).
+  // applyProject 의 fromJSON → toArray 가 트랙 0 의 노트를 conductor track 으로
+  // 흡수하는 등 spessasynth 재생이 미묘하게 달라질 수 있어 편집 시에만 호출.
+  const [isDirty, setIsDirty] = useState(false);
+
   // ctx sampleRate 강제 (lesson 003)
   useEffect(() => {
     try {
@@ -124,6 +129,7 @@ export default function Home() {
     setInitialProject(loadedProject);
     setPast([]);
     setFuture([]);
+    setIsDirty(false); // 새 곡 = 편집 없음, 원본 buffer 그대로 재생
   };
 
   const handleSoundFontLoaded = async (buffer: ArrayBuffer) => {
@@ -142,6 +148,7 @@ export default function Home() {
       setFuture([]);
     }
     setProject(next);
+    setIsDirty(true);
     if (!isPlaying) {
       try {
         engine.applyProject(next);
@@ -157,6 +164,8 @@ export default function Home() {
     setPast((p) => p.slice(0, -1));
     setFuture((f) => [...f, project]);
     setProject(prev);
+    // initial 로 되돌렸으면 dirty 해제 (원본 buffer 재사용 가능)
+    setIsDirty(prev !== initialProject);
     if (!isPlaying) {
       try { engine.applyProject(prev); } catch (e) { console.warn('[page] undo applyProject:', e); }
     }
@@ -168,6 +177,7 @@ export default function Home() {
     setFuture((f) => f.slice(0, -1));
     setPast((p) => [...p, project]);
     setProject(next);
+    setIsDirty(next !== initialProject);
     if (!isPlaying) {
       try { engine.applyProject(next); } catch (e) { console.warn('[page] redo applyProject:', e); }
     }
@@ -179,6 +189,7 @@ export default function Home() {
     setPast((p) => [...p, project]);
     setFuture([]);
     setProject(initialProject);
+    setIsDirty(false); // 처음 = 원본
     if (!isPlaying) {
       try { engine.applyProject(initialProject); } catch (e) { console.warn('[page] reset applyProject:', e); }
     }
@@ -209,10 +220,13 @@ export default function Home() {
       engine.stop();
       setIsPlaying(false);
     } else {
-      try {
-        engine.applyProject(project);
-      } catch (e) {
-        console.warn('[page] applyProject(play) 실패:', e);
+      // 편집된 경우에만 SMF 재직렬화. 원본 buffer 가 있으면 그대로 재생.
+      if (isDirty) {
+        try {
+          engine.applyProject(project);
+        } catch (e) {
+          console.warn('[page] applyProject(play) 실패:', e);
+        }
       }
       await engine.play();
       setIsPlaying(true);
