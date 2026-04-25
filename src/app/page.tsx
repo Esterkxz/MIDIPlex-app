@@ -128,15 +128,25 @@ export default function Home() {
   }, [isPlaying, engine]);
 
   const handleMidiLoaded = (
-    loadedMidi: Midi,
     loadedProject: ProjectState,
-    buffer: ArrayBuffer,
+    loadedMidi: Midi | null,
+    buffer: ArrayBuffer | null,
     fileName: string,
   ) => {
     engine.stop();
     setMidi(loadedMidi);
     setProject(loadedProject);
-    engine.loadMidi(loadedMidi, buffer, fileName);
+    if (loadedMidi && buffer) {
+      // 표준 MIDI — 원본 buffer 그대로 sequencer 에 (편집 없는 상태에선 이게 정확)
+      engine.loadMidi(loadedMidi, buffer, fileName);
+    } else {
+      // NWC 등 비-SMF 입력 — applyProject 로 SMF 재직렬화 후 sequencer
+      try {
+        engine.applyProject(loadedProject);
+      } catch (e) {
+        console.warn('[page] NWC applyProject 실패:', e);
+      }
+    }
     setIsPlaying(false);
     // 활성 트랙: 첫 노트 트랙
     const firstWithNotes = loadedProject.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);

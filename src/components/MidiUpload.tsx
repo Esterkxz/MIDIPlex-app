@@ -4,9 +4,16 @@ import { ChangeEvent, DragEvent, useState } from 'react';
 import type { ProjectState } from '@/lib/types/project';
 import { Midi } from '@tonejs/midi';
 import { loadMidiFromBuffer } from '@/lib/midi-loader';
+import { loadNwctxtFromText } from '@/lib/nwctxt-loader';
 
 type Props = {
-  onLoaded: (midi: Midi, project: ProjectState, buffer: ArrayBuffer, fileName: string) => void;
+  /** loadedMidi/buffer 는 NWC 같은 비-SMF 입력의 경우 null. page 가 applyProject 로 폴백. */
+  onLoaded: (
+    project: ProjectState,
+    loadedMidi: Midi | null,
+    buffer: ArrayBuffer | null,
+    fileName: string,
+  ) => void;
 };
 
 export default function MidiUpload({ onLoaded }: Props) {
@@ -16,11 +23,18 @@ export default function MidiUpload({ onLoaded }: Props) {
   const handleFile = async (file: File) => {
     setError(null);
     try {
-      const buffer = await file.arrayBuffer();
-      const { midi, project } = loadMidiFromBuffer(buffer);
-      onLoaded(midi, project, buffer, file.name);
+      const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+      if (ext === 'nwctxt' || ext === 'nwc-txt' || file.type === 'text/plain') {
+        const text = await file.text();
+        const { project } = loadNwctxtFromText(text, file.name);
+        onLoaded(project, null, null, file.name);
+      } else {
+        const buffer = await file.arrayBuffer();
+        const { midi, project } = loadMidiFromBuffer(buffer);
+        onLoaded(project, midi, buffer, file.name);
+      }
     } catch (e) {
-      setError(`MIDI 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
+      setError(`파일 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -49,10 +63,11 @@ export default function MidiUpload({ onLoaded }: Props) {
           isDragging ? 'border-blue-600 bg-blue-50' : 'border-gray-300'
         }`}
       >
-        <p className="text-sm text-gray-600 mb-3">MIDI 파일을 끌어 놓거나 선택하세요</p>
+        <p className="text-sm text-gray-600 mb-1">MIDI 또는 NWC 텍스트 파일을 끌어 놓거나 선택하세요</p>
+        <p className="text-[10px] text-gray-400 mb-3">.mid · .midi · .nwctxt</p>
         <input
           type="file"
-          accept=".mid,.midi,audio/midi,audio/x-midi"
+          accept=".mid,.midi,.nwctxt,audio/midi,audio/x-midi,text/plain"
           onChange={handleInputChange}
           className="text-sm"
         />
