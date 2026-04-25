@@ -598,24 +598,19 @@ function parseDynamicToken(reader: Reader, staff: V1Staff, version: number) {
 }
 
 function parsePedalToken(reader: Reader, staff: V1Staff, version: number) {
-  // zz85 spec:
-  //   1.7: pos(byte) + placement=0 + style(byte)
-  //   1.5/1.55: pos(byte) + unknown(byte) + placement(byte) + style(byte)
-  //   2.x: pos(byte) + unknown(byte) + placement(byte) + style(byte)
+  // zz85 spec (parsePedal 정확 재확인):
+  //   1.7+: pos(byte) + placement(byte) + style(byte)  = 3 byte
+  //   <= 1.55: pos(byte) + unknown(byte) + placement(byte) + style(byte) = 4 byte
   let style = 0;
-  if (version >= 2) {
-    reader.readByte(); // pos
-    reader.readByte(); // unknown
-    reader.readByte(); // placement
-    style = reader.readByte();
-  } else if (version <= 1.55) {
+  if (version <= 1.55) {
     reader.readByte(); // pos
     reader.readByte(); // unknown
     reader.readByte(); // placement
     style = reader.readByte();
   } else {
-    // 1.7
+    // 1.7 / 1.75 / 2.x — 3 byte
     reader.readByte(); // pos
+    reader.readByte(); // placement
     style = reader.readByte();
   }
   // style: 0 = Down, 1 = Released
