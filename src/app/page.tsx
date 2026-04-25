@@ -6,10 +6,12 @@ import * as Tone from 'tone';
 import MidiUpload from '@/components/MidiUpload';
 import SoundFontUpload from '@/components/SoundFontUpload';
 import PianoRoll from '@/components/PianoRoll';
+import TrackSidebar from '@/components/TrackSidebar';
 import type { ProjectState } from '@/lib/types/project';
 import { AudioEngine } from '@/lib/audio-engine';
 
 const VOLUME_KEY = 'midiplex.volume';
+const SIDEBAR_KEY = 'midiplex.sidebar.collapsed';
 const DEFAULT_VOLUME = 0.1;
 const DESIRED_SAMPLE_RATE = 48000; // lesson 003 — Windows 고급 오디오 device 의 비표준 rate (384kHz 등) 호환
 
@@ -24,6 +26,8 @@ export default function Home() {
   const [currentTime, setCurrentTime] = useState(0);
   const [sfLoaded, setSfLoaded] = useState(false);
   const [mode, setMode] = useState<'oscillator' | 'spessasynth'>('oscillator');
+  const [activeTrack, setActiveTrack] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // ctx sampleRate 강제 (lesson 003)
   useEffect(() => {
@@ -39,7 +43,7 @@ export default function Home() {
     }
   }, []);
 
-  // 볼륨 hydration
+  // 볼륨 + 사이드바 hydration
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(VOLUME_KEY);
@@ -49,6 +53,8 @@ export default function Home() {
           setVolume(parsed);
         }
       }
+      const sb = window.localStorage.getItem(SIDEBAR_KEY);
+      if (sb === '1') setSidebarCollapsed(true);
     } catch {}
     setHydrated(true);
   }, []);
@@ -59,6 +65,13 @@ export default function Home() {
       window.localStorage.setItem(VOLUME_KEY, String(volume));
     } catch {}
   }, [volume, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? '1' : '0');
+    } catch {}
+  }, [sidebarCollapsed, hydrated]);
 
   useEffect(() => {
     engine.setOnEnd(() => setIsPlaying(false));
@@ -98,6 +111,9 @@ export default function Home() {
     setProject(loadedProject);
     engine.loadMidi(loadedMidi, buffer, fileName);
     setIsPlaying(false);
+    // 활성 트랙: 첫 노트 트랙
+    const firstWithNotes = loadedProject.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
+    setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
   };
 
   const handleSoundFontLoaded = async (buffer: ArrayBuffer) => {
@@ -108,7 +124,6 @@ export default function Home() {
 
   const handleProjectChange = (next: ProjectState) => {
     setProject(next);
-    // 재생 중이면 다음 play 때 반영 (sequencer reload 가 끊김 유발 가능). 정지 중이면 즉시 반영.
     if (!isPlaying) {
       try {
         engine.applyProject(next);
@@ -124,7 +139,6 @@ export default function Home() {
       engine.stop();
       setIsPlaying(false);
     } else {
-      // 매번 fresh 보장 — 편집 후 첫 play 의 동기 누락 방지
       try {
         engine.applyProject(project);
       } catch (e) {
@@ -136,23 +150,28 @@ export default function Home() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center p-8 gap-6 bg-white text-gray-900">
-      <header className="flex flex-col items-center gap-1">
-        <h1 className="text-3xl font-bold">MIDIPlex</h1>
-        <p className="text-sm text-gray-600">웹 MIDI 작곡 · 편곡 도구 (Phase 2 MVP 진행 중)</p>
-      </header>
-
-      <div className="flex flex-col md:flex-row gap-6 items-start">
-        <MidiUpload onLoaded={handleMidiLoaded} />
-        <SoundFontUpload onLoaded={handleSoundFontLoaded} loaded={sfLoaded} />
-      </div>
-
-      {project && (
+    <main className="flex flex-col h-screen w-screen bg-white text-gray-900 overflow-hidden">
+      {/* 상단 헤더 + 업로드 영역 (project 로드 전) */}
+      {!project ? (
+        <div className="flex flex-col items-center p-8 gap-6 flex-1 overflow-y-auto">
+          <header className="flex flex-col items-center gap-1">
+            <h1 className="text-3xl font-bold">MIDIPlex</h1>
+            <p className="text-sm text-gray-600">웹 MIDI 작곡 · 편곡 도구 (Phase 2 MVP 진행 중)</p>
+          </header>
+          <div className="flex flex-col md:flex-row gap-6 items-start">
+            <MidiUpload onLoaded={handleMidiLoaded} />
+            <SoundFontUpload onLoaded={handleSoundFontLoaded} loaded={sfLoaded} />
+          </div>
+        </div>
+      ) : (
         <>
-          <div className="flex gap-6 items-center flex-wrap justify-center">
+          {/* 컴팩트 헤더 + 컨트롤 바 (project 로드 후) */}
+          <div className="flex items-center gap-4 px-4 py-2 border-b bg-white flex-wrap">
+            <h1 className="text-lg font-bold whitespace-nowrap">MIDIPlex</h1>
+
             <button
               onClick={handlePlayToggle}
-              className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              className="px-4 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm"
             >
               {isPlaying ? '⏹ 정지' : '▶ 재생'}
             </button>
@@ -166,45 +185,53 @@ export default function Home() {
                 step={1}
                 value={Math.round(volume * 100)}
                 onChange={(e) => setVolume(Number(e.target.value) / 100)}
-                className="w-32"
+                className="w-24"
               />
-              <span className="w-10 text-right tabular-nums">{Math.round(volume * 100)}%</span>
+              <span className="w-10 text-right tabular-nums text-xs">{Math.round(volume * 100)}%</span>
             </label>
 
             <span className="text-xs px-2 py-1 rounded bg-gray-100 border">
-              모드: {mode === 'spessasynth' ? '🎹 SoundFont (spessasynth)' : '🌊 Oscillator (임시)'}
+              {mode === 'spessasynth' ? '🎹 SF' : '🌊 OSC'}
             </span>
 
-            <span className="text-sm text-gray-600">
+            <span className="text-xs text-gray-600 truncate flex-1 min-w-0" title={project.title}>
               {project.title} · {project.tracks.length} 트랙 · {project.durationSeconds.toFixed(1)}s · BPM {project.bpm}
             </span>
+
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-500 hover:text-gray-700">파일 교체</summary>
+              <div className="absolute right-4 top-12 bg-white border rounded shadow-lg p-3 z-10 flex flex-col gap-3">
+                <MidiUpload onLoaded={handleMidiLoaded} />
+                <SoundFontUpload onLoaded={handleSoundFontLoaded} loaded={sfLoaded} />
+              </div>
+            </details>
           </div>
 
-          <PianoRoll
-            project={project}
-            currentTime={currentTime}
-            onProjectChange={handleProjectChange}
-            onPreviewNote={(midi, velocity, channel) => engine.previewNote(midi, velocity, channel)}
-          />
+          {/* 메인 작업 영역 — 사이드바 + 피아노롤 */}
+          <div className="flex flex-1 min-h-0">
+            <TrackSidebar
+              tracks={project.tracks}
+              activeIndex={activeTrack}
+              onActiveChange={setActiveTrack}
+              collapsed={sidebarCollapsed}
+              onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+            />
+            <section className="flex-1 min-w-0 p-2 flex flex-col">
+              <PianoRoll
+                project={project}
+                currentTime={currentTime}
+                onProjectChange={handleProjectChange}
+                onPreviewNote={(midi, velocity, channel) => engine.previewNote(midi, velocity, channel)}
+                activeTrack={activeTrack}
+              />
+            </section>
+          </div>
 
-          <details className="text-sm text-gray-600 max-w-3xl w-full">
-            <summary className="cursor-pointer">트랙 정보</summary>
-            <ul className="mt-2 space-y-1 list-disc list-inside">
-              {project.tracks.map((t) => (
-                <li key={t.id}>
-                  {t.name} · {t.notes?.length ?? 0} notes · channel {t.channel} · instrument {t.instrumentId}
-                </li>
-              ))}
-            </ul>
-          </details>
+          <footer className="px-4 py-1 text-[10px] text-gray-400 text-center border-t bg-white">
+            Phase 2 MVP — M1~M6 walking · ADR 0001 v1.1 + ADR 0006 + lesson 002·003·004 회피
+          </footer>
         </>
       )}
-
-      <footer className="mt-8 text-xs text-gray-400 text-center">
-        Phase 2 MVP — M1 (업로드) · M2 (파싱) · M3 (피아노롤) · M4/M5 (재생 + 사운드폰트) · M6 (편집: 선택/연필/지우개/드래그/마키/Delete) — `MIDIPlex/.agent/PM/003_WBS.md`
-        <br />
-        ADR 0001 v1.1 + ADR 0006 + lesson 002·003·004 회피.
-      </footer>
     </main>
   );
 }

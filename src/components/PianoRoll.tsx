@@ -10,6 +10,8 @@ type Props = {
   onProjectChange?: (next: ProjectState) => void;
   /** 연필로 노트 그을 때 즉시 미리듣기 (M6 편집 UX). */
   onPreviewNote?: (midi: number, velocity?: number, channel?: number) => void;
+  /** 활성 트랙 — 연필 모드에서 신규 노트 들어갈 트랙. 사이드바가 owner. */
+  activeTrack?: number;
 };
 
 type Tool = 'select' | 'pencil' | 'eraser';
@@ -76,7 +78,13 @@ type FlatNote = {
   noteIndex: number;
 };
 
-export default function PianoRoll({ project, currentTime = 0, onProjectChange, onPreviewNote }: Props) {
+export default function PianoRoll({
+  project,
+  currentTime = 0,
+  onProjectChange,
+  onPreviewNote,
+  activeTrack: activeTrackProp,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -91,7 +99,8 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
   // 편집 상태
   const [tool, setTool] = useState<Tool>('select');
   const [snapDenom, setSnapDenom] = useState<number>(16); // 1/16 default
-  const [activeTrack, setActiveTrack] = useState<number>(0);
+  // activeTrack 은 prop 우선, fallback 으로 0
+  const activeTrack = activeTrackProp ?? 0;
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [dragState, setDragState] = useState<DragState | null>(null);
 
@@ -116,7 +125,7 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
     [project.ppq, project.bpm],
   );
 
-  // 새 곡 로드 시 viewport 초기화 + 선택 해제 + 활성 트랙 보정
+  // 새 곡 로드 시 viewport 초기화 + 선택 해제 (activeTrack 은 page.tsx 가 owner)
   useEffect(() => {
     setScrollX(0);
     setScrollY(Math.max(0, minPitch - 6));
@@ -125,9 +134,6 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
     setXScale(Math.min(fitScale, DEFAULT_X_SCALE));
     setSelection(new Set());
     setDragState(null);
-    // 활성 트랙: 첫 노트 트랙
-    const firstWithNotes = project.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
-    setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
@@ -654,7 +660,7 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
     'cursor-default';
 
   return (
-    <div className="w-full flex flex-col gap-2">
+    <div className="w-full h-full flex flex-col gap-2 min-h-0">
       {/* 도구 바 */}
       {editable && (
         <div className="flex gap-2 items-center text-xs flex-wrap">
@@ -678,18 +684,7 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
               <option key={d} value={d}>1/{d}</option>
             ))}
           </select>
-          <span className="text-gray-500 ml-3">트랙:</span>
-          <select
-            value={activeTrack}
-            onChange={(e) => setActiveTrack(Number(e.target.value))}
-            className="px-2 py-1 border rounded bg-white max-w-[180px]"
-          >
-            {project.tracks.map((t, i) => (
-              <option key={t.id} value={i}>
-                {i}: {t.name} ({t.notes?.length ?? 0})
-              </option>
-            ))}
-          </select>
+          <span className="text-gray-400 ml-3">활성 트랙: {project.tracks[activeTrack]?.name ?? '-'}</span>
           {selection.size > 0 && (
             <button
               onClick={() => deleteNotes([...selection])}
@@ -724,7 +719,7 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
         </span>
       </div>
 
-      {/* viewport */}
+      {/* viewport — 부모 flex-1 안에서 가로/세로 모두 채움 */}
       <div
         ref={containerRef}
         onMouseDown={onMouseDown}
@@ -732,13 +727,9 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange, o
         onMouseUp={onMouseUp}
         onMouseLeave={() => { if (dragState) onMouseUp(); }}
         onContextMenu={(e) => e.preventDefault()}
-        className={`border border-gray-300 rounded overflow-hidden bg-white ${cursorClass}`}
+        className={`border border-gray-300 rounded overflow-hidden bg-white flex-1 min-h-0 ${cursorClass}`}
         style={{
           width: '100%',
-          height: '420px',
-          resize: 'vertical',
-          minHeight: '200px',
-          maxHeight: '90vh',
           position: 'relative',
           userSelect: 'none',
         }}
