@@ -59,7 +59,7 @@ export default function TrackSidebar({
   return (
     <aside
       className={`flex flex-col border-r bg-gray-50 transition-all overflow-hidden ${
-        collapsed ? 'w-10' : 'w-72'
+        collapsed ? 'w-24' : 'w-72'
       }`}
       style={{ flexShrink: 0 }}
     >
@@ -126,18 +126,21 @@ export default function TrackSidebar({
               title={tooltip}
             >
               {collapsed ? (
-                <div className="flex items-center justify-center py-2 gap-1">
+                <div className="flex items-center py-2 gap-1.5 px-2">
                   <input
                     type="checkbox"
                     checked={isVisible}
                     onChange={() => handleTrackToggle(i)}
                     onClick={(e) => e.stopPropagation()}
-                    className="cursor-pointer"
+                    className="cursor-pointer flex-shrink-0"
                   />
                   <span
-                    className="w-3 h-3 rounded-sm"
+                    className="w-3 h-3 rounded-sm flex-shrink-0"
                     style={{ background: color }}
                   />
+                  <span className="text-[10px] text-gray-700 font-medium tabular-nums">
+                    {i}
+                  </span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 px-3 py-2">
