@@ -168,8 +168,9 @@ interface StaffState {
   measureAccidentals: Map<string, number>;
   notes: Note[];
   currentTick: number;
-  /** GM program number (트랙 자체엔 명시 안 됨 — Patch 정보가 있으면 거기서) */
+  /** GM program number — |Instrument|Patch:N| inline 라인에서 추출 (첫 값만). */
   programNumber: number;
+  programSet: boolean;
   /** 명시 채널이 없으면 staff index */
   channel: number;
 }
@@ -185,6 +186,7 @@ function makeStaffState(name: string, channel: number): StaffState {
     notes: [],
     currentTick: 0,
     programNumber: 0,
+    programSet: false,
     channel,
   };
 }
@@ -234,13 +236,28 @@ export function loadNwctxtFromText(
         break;
 
       case 'StaffInstrument':
+        // |StaffInstrument| 는 staff 글로벌 설정 (Trans, DynVel) — Patch 는 보통 없음.
+        // NWC 의 진짜 program change 는 |Instrument|Patch:N| 라인 (별도 case).
         if (currentStaff && props.Patch) {
           const p = parseInt(props.Patch, 10);
-          if (Number.isFinite(p)) currentStaff.programNumber = Math.max(0, Math.min(127, p));
+          if (Number.isFinite(p)) {
+            currentStaff.programNumber = Math.max(0, Math.min(127, p));
+            currentStaff.programSet = true;
+          }
         }
-        if (currentStaff && props.Trans) {
-          // 이조 처리 — walking 으로 무시. follow-up.
-          warnings.push(`StaffInstrument Trans 무시됨: ${props.Trans}`);
+        if (currentStaff && props.Trans && props.Trans !== '0') {
+          warnings.push(`StaffInstrument Trans 무시됨 (${currentStaff.name}: ${props.Trans})`);
+        }
+        break;
+
+      case 'Instrument':
+        // staff 안의 inline patch change. 첫 라인이 staff 시작 instrument.
+        if (currentStaff && !currentStaff.programSet && props.Patch) {
+          const p = parseInt(props.Patch, 10);
+          if (Number.isFinite(p)) {
+            currentStaff.programNumber = Math.max(0, Math.min(127, p));
+            currentStaff.programSet = true;
+          }
         }
         break;
 
