@@ -1,5 +1,5 @@
 import { Midi } from '@tonejs/midi';
-import type { ProjectState, Track, Note, InstrumentRef } from './types/project';
+import type { ProjectState, Track, Note, InstrumentRef, ControlChange } from './types/project';
 import { nextNoteId } from './types/project';
 
 /**
@@ -138,7 +138,25 @@ function loadTrack(
     solo: false,
     volume: 1.0,
     pan: 0,
+    controlChanges: extractControlChanges(track),
   };
+}
+
+function extractControlChanges(track: Midi['tracks'][number]): ControlChange[] {
+  const out: ControlChange[] = [];
+  const ccMap = track.controlChanges ?? {};
+  for (const arr of Object.values(ccMap)) {
+    if (!Array.isArray(arr)) continue;
+    for (const cc of arr) {
+      out.push({
+        number: cc.number,
+        value: Math.round(Math.max(0, Math.min(1, cc.value)) * 127),
+        tick: cc.ticks,
+      });
+    }
+  }
+  out.sort((a, b) => a.tick - b.tick);
+  return out;
 }
 
 function extractInstruments(midi: Midi): InstrumentRef[] {

@@ -34,6 +34,17 @@ export function projectToSmfBuffer(project: ProjectState): ArrayBuffer {
     tracks: project.tracks.map((track) => {
       const instMatch = /instrument-(\d+)/.exec(track.instrumentId ?? '');
       const programNum = instMatch ? parseInt(instMatch[1], 10) : 0;
+      // controlChanges 를 CC number 별 객체로 그룹 (@tonejs/midi 형식)
+      const ccByNumber: Record<number, unknown[]> = {};
+      for (const cc of track.controlChanges ?? []) {
+        if (!ccByNumber[cc.number]) ccByNumber[cc.number] = [];
+        ccByNumber[cc.number].push({
+          number: cc.number,
+          ticks: cc.tick,
+          value: Math.max(0, Math.min(1, cc.value / 127)),
+          time: cc.tick / ticksPerSec,
+        });
+      }
       return {
         name: track.name,
         channel: track.channel,
@@ -53,7 +64,7 @@ export function projectToSmfBuffer(project: ProjectState): ArrayBuffer {
           name: '',
           noteOffVelocity: 0,
         })),
-        controlChanges: {},
+        controlChanges: ccByNumber,
         pitchBends: [],
         endOfTrackTicks: 0,
       };

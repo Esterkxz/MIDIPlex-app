@@ -28,7 +28,7 @@
  * SMF 표준화: ppq=480 고정. 모든 Dur 은 ppq 배수로 변환.
  */
 
-import type { ProjectState, Track, Note, InstrumentRef } from './types/project';
+import type { ProjectState, Track, Note, InstrumentRef, ControlChange } from './types/project';
 import { nextNoteId } from './types/project';
 
 const PPQ = 480;
@@ -92,18 +92,21 @@ function midiFromLetter(letter: Letter, octave: number): number {
  * 예: "6" / "-2" / "#6" / "b3" / "n5" / "x6" (double sharp) / "v3" (double flat)
  *     "5o" (open notehead) / "5^" (tied)
  */
-function parsePosToken(tok: string): { pos: number; accidental: number; isNatural: boolean } {
-  // [accidental?] [signed pos] [notehead?] [tied?]
-  const m = /^([#bnxv]?)(-?\d+)[oxXzyYabcdefghijklmnpqrstuvw]?\^?$/.exec(tok.trim());
-  if (!m) return { pos: 0, accidental: 0, isNatural: false };
+function parsePosToken(tok: string): { pos: number; accidental: number; isNatural: boolean; tied: boolean } {
+  // [accidental?] [signed pos] [notehead?] [tied (^)?]
+  const m = /^([#bnxv]?)(-?\d+)([oxXzyYabcdefghijklmnpqrstuvw]?)(\^?)$/.exec(tok.trim());
+  if (!m) return { pos: 0, accidental: 0, isNatural: false, tied: false };
   const acc = m[1];
   const pos = parseInt(m[2], 10);
-  if (acc === '#') return { pos, accidental: 1, isNatural: false };
-  if (acc === 'b') return { pos, accidental: -1, isNatural: false };
-  if (acc === 'n') return { pos, accidental: 0, isNatural: true };
-  if (acc === 'x') return { pos, accidental: 2, isNatural: false };
-  if (acc === 'v') return { pos, accidental: -2, isNatural: false };
-  return { pos, accidental: 0, isNatural: false };
+  const tied = m[4] === '^';
+  let accidental = 0;
+  let isNatural = false;
+  if (acc === '#') accidental = 1;
+  else if (acc === 'b') accidental = -1;
+  else if (acc === 'n') isNatural = true;
+  else if (acc === 'x') accidental = 2;
+  else if (acc === 'v') accidental = -2;
+  return { pos, accidental, isNatural, tied };
 }
 
 /**
@@ -114,20 +117,22 @@ function parsePosToken(tok: string): { pos: number; accidental: number; isNatura
  * - Grace: 짧은 ornament — 시간 누적 안 함 (호출부에서 처리)
  * - Slur/Tie/Accent/Staccato/Tenuto: duration 영향 없음
  */
-function parseDuration(durValue: string): { ticks: number; isGrace: boolean } {
+function parseDuration(durValue: string): { ticks: number; isGrace: boolean; isTie: boolean } {
   const tokens = durValue.split(',').map((t) => t.trim());
   const baseTok = tokens[0] || 'Quarter';
   const base = DURATION_BASE[baseTok] ?? PPQ;
   let mult = 1;
   let isGrace = false;
+  let isTie = false;
   for (const t of tokens.slice(1)) {
     if (t === 'Dotted') mult *= 1.5;
     else if (t === 'DblDotted') mult *= 1.75;
     else if (t === 'Triplet' || t.startsWith('Triplet=')) mult *= 2 / 3;
     else if (t === 'Grace') isGrace = true;
-    // Slur, Tie, Staccato, Accent, Tenuto 등은 duration 영향 없음
+    else if (t === 'Tie') isTie = true;
+    // Slur, Staccato, Accent, Tenuto 등은 duration 영향 없음
   }
-  return { ticks: Math.round(base * mult), isGrace };
+  return { ticks: Math.round(base * mult), isGrace, isTie };
 }
 
 /** Key Signature 의 sharp/flat 적용 letter set. */
@@ -143,6 +148,36 @@ function parseKeySig(sigValue: string): { sharps: Set<Letter>; flats: Set<Letter
     else if (sym === 'b') flats.add(letter);
   }
   return { sharps, flats };
+}
+
+/** Staff 의 default volume / pan 을 staff 시작 (currentTick=0) 시점에 emit. 한 번만. */
+function emitInitialCcs(staff: StaffState) {
+  if (staff.initialCcEmitted) return;
+  staff.initialCcEmitted = true;
+  if (staff.initialVolume !== 100) {
+    staff.controlChanges.push({ number: 7, value: staff.initialVolume, tick: 0 });
+  }
+  if (staff.initialPan !== 64) {
+    staff.controlChanges.push({ number: 10, value: staff.initialPan, tick: 0 });
+  }
+}
+
+/** MPC Controller 이름 → MIDI CC number. -1 = pitch bend (별도 처리). */
+function mpcControllerToCc(controller: string): number {
+  switch (controller.toLowerCase()) {
+    case 'mod': return 1;
+    case 'bc': return 2;
+    case 'foot': return 4;
+    case 'portamento': return 5;
+    case 'datamsb': return 6;
+    case 'vol': return 7;
+    case 'bal': return 8;
+    case 'pan': return 10;
+    case 'exp': return 11;
+    case 'sustain': return 64;
+    case 'pitch': return -1; // pitch bend — CC 아님
+    default: return -2; // 미지원
+  }
 }
 
 /** 한 줄 |Type|Key:Value|Key:Value| 파싱. */
@@ -187,6 +222,15 @@ interface StaffState {
   dynVel: number[];
   /** 현재 다이내믹의 노트 velocity (0~1) — |Dynamic|Style: 가 변경 */
   currentVelocity: number;
+  /** Control Change 시계열 (sustain/pan/volume/expression 등) */
+  controlChanges: ControlChange[];
+  /** staff 의 default volume / pan emit 했는지 (한 번만) */
+  initialCcEmitted: boolean;
+  /** StaffProperties 에서 추출한 default 값 */
+  initialVolume: number; // 0~127
+  initialPan: number; // 0~127
+  /** 마지막 tied 노트 — 다음 같은 pitch 노트와 합치기 */
+  pendingTie: PendingTie | null;
 }
 
 const DYNAMIC_LEVELS = ['ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff'] as const;
@@ -207,7 +251,17 @@ function makeStaffState(name: string, channel: number): StaffState {
     channel,
     dynVel: [...DEFAULT_DYNVEL],
     currentVelocity: 75 / 127, // mf default
+    controlChanges: [],
+    initialCcEmitted: false,
+    initialVolume: 100,
+    initialPan: 64,
+    pendingTie: null,
   };
+}
+
+interface PendingTie {
+  midi: number;
+  noteIndex: number;
 }
 
 export function loadNwctxtFromText(
@@ -247,10 +301,52 @@ export function loadNwctxtFromText(
         break;
 
       case 'StaffProperties':
-        // 채널 명시 등
+        // 채널 명시 + 볼륨 + 팬
         if (currentStaff && props.Channel) {
           const ch = parseInt(props.Channel, 10);
           if (Number.isFinite(ch)) currentStaff.channel = Math.max(0, ch - 1);
+        }
+        if (currentStaff && props.Volume) {
+          const v = parseInt(props.Volume, 10);
+          if (Number.isFinite(v)) currentStaff.initialVolume = Math.max(0, Math.min(127, v));
+        }
+        if (currentStaff && props.StereoPan) {
+          const p = parseInt(props.StereoPan, 10);
+          if (Number.isFinite(p)) currentStaff.initialPan = Math.max(0, Math.min(127, p));
+        }
+        break;
+
+      case 'SustainPedal':
+        // |SustainPedal|Status:Down/Released|Pos:N
+        if (currentStaff && props.Status) {
+          const value = props.Status === 'Down' ? 127 : 0;
+          currentStaff.controlChanges.push({
+            number: 64,
+            value,
+            tick: currentStaff.currentTick,
+          });
+        }
+        break;
+
+      case 'MPC':
+        // |MPC|Controller:vol/pan/exp/mod|Style:Absolute|Pt1:0,N|...
+        // walking — Style:Absolute 의 Pt1 만 처리 (일정 값으로 즉시 변경)
+        if (currentStaff && props.Controller && props.Pt1) {
+          const ccNumber = mpcControllerToCc(props.Controller);
+          if (ccNumber >= 0) {
+            // Pt1:tick,value — tick 은 staff 시작부터의 offset (단순화: 현재 tick 사용)
+            const parts = props.Pt1.split(',').map((s) => parseFloat(s.trim()));
+            const value = parts[1];
+            if (Number.isFinite(value)) {
+              // pitch bend 는 14-bit (0~16383) — 우리 CC 인프라는 0~127 만, 일단 normalize
+              const normalized = ccNumber === -1 ? 0 : Math.max(0, Math.min(127, Math.round(value)));
+              currentStaff.controlChanges.push({
+                number: ccNumber,
+                value: normalized,
+                tick: currentStaff.currentTick,
+              });
+            }
+          }
         }
         break;
 
@@ -338,17 +434,20 @@ export function loadNwctxtFromText(
 
       case 'Rest': {
         if (!currentStaff) break;
+        emitInitialCcs(currentStaff);
         const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
-        // Grace rest 는 시간 안 차지 (실제로는 거의 없는 케이스)
+        // Rest 는 tie chain 끊음
+        currentStaff.pendingTie = null;
         if (!isGrace) currentStaff.currentTick += ticks;
         break;
       }
 
       case 'Note': {
         if (!currentStaff) break;
-        const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
+        emitInitialCcs(currentStaff);
+        const { ticks, isGrace, isTie } = parseDuration(props.Dur || 'Quarter');
         const posTok = props.Pos || '0';
-        const { pos, accidental, isNatural } = parsePosToken(posTok);
+        const { pos, accidental, isNatural, tied: posTied } = parsePosToken(posTok);
         const clefBase = CLEF_BASE[currentStaff.clef] ?? CLEF_BASE.Treble;
         const { letter, octave: rawOctave } = posToLetterOctave(pos, clefBase);
         const octave = rawOctave + currentStaff.clefOctaveShift;
@@ -364,25 +463,51 @@ export function loadNwctxtFromText(
         } else if (currentStaff.keyFlats.has(letter)) {
           midi -= 1;
         }
-        // Grace 는 시간 차지 안 함 — duration 짧게 (32nd) 으로 강제 + tick 누적 안 함
+        const finalMidi = Math.max(0, Math.min(127, midi));
         const noteDur = isGrace ? Math.max(PPQ / 8, 24) : ticks;
+        const isTied = isTie || posTied;
+
+        // Tie 처리 — pendingTie 의 같은 pitch 노트 발견 시 duration 합산 + skip push
+        if (
+          !isGrace &&
+          currentStaff.pendingTie &&
+          currentStaff.pendingTie.midi === finalMidi
+        ) {
+          currentStaff.notes[currentStaff.pendingTie.noteIndex].durationTicks += ticks;
+          // 새 tie 인 경우 그대로 유지, 아니면 해제
+          if (!isTied) currentStaff.pendingTie = null;
+          currentStaff.currentTick += ticks;
+          break;
+        }
+
         currentStaff.notes.push({
           id: nextNoteId(),
           tick: currentStaff.currentTick,
           durationTicks: noteDur,
-          midi: Math.max(0, Math.min(127, midi)),
+          midi: finalMidi,
           velocity: currentStaff.currentVelocity,
         });
+        if (isTied && !isGrace) {
+          currentStaff.pendingTie = {
+            midi: finalMidi,
+            noteIndex: currentStaff.notes.length - 1,
+          };
+        } else {
+          currentStaff.pendingTie = null;
+        }
         if (!isGrace) currentStaff.currentTick += ticks;
         break;
       }
 
       case 'Chord': {
         if (!currentStaff) break;
+        emitInitialCcs(currentStaff);
         const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
         const posList = (props.Pos || '0').split(',');
         const clefBase = CLEF_BASE[currentStaff.clef] ?? CLEF_BASE.Treble;
         const noteDur = isGrace ? Math.max(PPQ / 8, 24) : ticks;
+        // Chord 는 tie chain 끊음 (단순화)
+        currentStaff.pendingTie = null;
         for (const posTok of posList) {
           const { pos, accidental, isNatural } = parsePosToken(posTok);
           const { letter, octave: rawOctave } = posToLetterOctave(pos, clefBase);
@@ -462,6 +587,7 @@ export function loadNwctxtFromText(
     solo: false,
     volume: 1.0,
     pan: 0,
+    controlChanges: s.controlChanges.length > 0 ? s.controlChanges : undefined,
   }));
 
   const totalTicks = Math.max(...staves.map((s) => s.currentTick), 0);

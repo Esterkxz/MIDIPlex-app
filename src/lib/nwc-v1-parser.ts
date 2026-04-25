@@ -22,7 +22,7 @@
  *   - 1.5 의 일부 변종 byte layout
  */
 
-import type { ProjectState, Track, Note } from './types/project';
+import type { ProjectState, Track, Note, ControlChange } from './types/project';
 import { nextNoteId } from './types/project';
 
 const PPQ = 480;
@@ -122,6 +122,14 @@ interface V1Staff {
   clefOctaveShift: number;
   /** 현재 다이내믹 노트 velocity (0~1) — Dynamic token 이 변경 */
   currentVelocity: number;
+  /** Control Change 시계열 */
+  controlChanges: ControlChange[];
+  /** Staff 의 default volume (CC7) — StaffInfo 에서 추출 */
+  partVolume: number;
+  /** Staff 의 default pan (CC10) — StaffInfo 에서 추출 */
+  stereoPan: number;
+  /** initial CC emit 플래그 */
+  initialCcEmitted: boolean;
 }
 
 // ============================================================================
@@ -198,6 +206,7 @@ export function parseV1Binary(
     solo: false,
     volume: 1.0,
     pan: 0,
+    controlChanges: s.controlChanges.length > 0 ? s.controlChanges : undefined,
   }));
 
   const totalTicks = Math.max(0, ...staves.map((s) => s.currentTick));
@@ -341,9 +350,9 @@ function parseV1Staff(
   reader.skip(1);
   reader.readByte(); // lines
   reader.readByte(); // layer
-  reader.readByte(); // part_volume
+  const partVolume = reader.readByte();
   reader.skip(1);
-  reader.readByte(); // stereo_pan
+  const stereoPan = reader.readByte();
 
   if (version === 1.7) {
     reader.skip(2);
@@ -391,6 +400,10 @@ function parseV1Staff(
     clef: CLEF_NAMES[staff_type] ?? 'Treble',
     clefOctaveShift: 0,
     currentVelocity: 75 / 127, // mf default
+    controlChanges: [],
+    partVolume,
+    stereoPan,
+    initialCcEmitted: false,
   };
   console.log(
     `[v1-parser.Staff] "${staff_name}" channel byte=${channel} → display ch${staff.channel + 1}`,
@@ -461,8 +474,8 @@ function parseV1Token(
     case 10: // Chord
       parseChordToken(reader, staff, version);
       return;
-    case 11: // Pedal
-      skipPedal(reader, version);
+    case 11: // Pedal (Sustain CC64)
+      parsePedalToken(reader, staff, version);
       return;
     case 13: // MidiInstruction
       reader.readByte(); // pos
@@ -584,21 +597,33 @@ function parseDynamicToken(reader: Reader, staff: V1Staff, version: number) {
   }
 }
 
-function skipPedal(reader: Reader, version: number) {
-  if (version < 1.7) {
+function parsePedalToken(reader: Reader, staff: V1Staff, version: number) {
+  // zz85 spec:
+  //   1.7: pos(byte) + placement=0 + style(byte)
+  //   1.5/1.55: pos(byte) + unknown(byte) + placement(byte) + style(byte)
+  //   2.x: pos(byte) + unknown(byte) + placement(byte) + style(byte)
+  let style = 0;
+  if (version >= 2) {
     reader.readByte(); // pos
-    reader.readByte(); // placement
-    reader.readByte(); // style
-  } else if (version >= 2) {
-    reader.readByte();
     reader.readByte(); // unknown
-    reader.readByte();
-    reader.readByte();
+    reader.readByte(); // placement
+    style = reader.readByte();
+  } else if (version <= 1.55) {
+    reader.readByte(); // pos
+    reader.readByte(); // unknown
+    reader.readByte(); // placement
+    style = reader.readByte();
   } else {
-    reader.readByte();
-    reader.readByte();
-    reader.readByte();
+    // 1.7
+    reader.readByte(); // pos
+    style = reader.readByte();
   }
+  // style: 0 = Down, 1 = Released
+  staff.controlChanges.push({
+    number: 64,
+    value: style === 0 ? 127 : 0,
+    tick: staff.currentTick,
+  });
 }
 
 function parseNoteToken(reader: Reader, staff: V1Staff, version: number) {
@@ -675,7 +700,20 @@ function decodeNoteDuration(data: Uint8Array): { ticks: number; isGrace: boolean
   return { ticks: Math.round(base * mult), isGrace: grace };
 }
 
+function emitInitialCcsV1(staff: V1Staff) {
+  if (staff.initialCcEmitted) return;
+  staff.initialCcEmitted = true;
+  // partVolume / stereoPan 0 일 때는 emit 안 함 (default), non-default 만
+  if (staff.partVolume > 0 && staff.partVolume !== 100) {
+    staff.controlChanges.push({ number: 7, value: Math.min(127, staff.partVolume), tick: 0 });
+  }
+  if (staff.stereoPan !== 64) {
+    staff.controlChanges.push({ number: 10, value: Math.min(127, staff.stereoPan), tick: 0 });
+  }
+}
+
 function appendNoteFromData(data: Uint8Array, staff: V1Staff) {
+  emitInitialCcsV1(staff);
   const { ticks, isGrace } = decodeNoteDuration(data);
 
   // position decode: byte > 127 ? 256 - byte : -byte

@@ -54,6 +54,8 @@ export interface Track {
   volume?: number;
   /** -1.0 (좌) ~ 1.0 (우) */
   pan?: number;
+  /** Control Change 이벤트 시계열 (sustain/expression/volume/pan inline 변경) */
+  controlChanges?: ControlChange[];
 }
 
 export interface Note {
@@ -67,6 +69,16 @@ export interface Note {
   midi: number;
   /** 0.0 ~ 1.0 linear (Web Audio dB 변환은 재생 엔진에서) */
   velocity: number;
+}
+
+/** MIDI Control Change event (CC#0~127) — 트랙별 sustain/expression/volume/pan 등. */
+export interface ControlChange {
+  /** CC number 0~127 (예: 7=volume, 10=pan, 11=expression, 64=sustain) */
+  number: number;
+  /** 값 0~127 */
+  value: number;
+  /** MIDI tick 위치 */
+  tick: number;
 }
 
 /** 편집 추적을 위한 안정 ID 생성 */
