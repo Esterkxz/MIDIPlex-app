@@ -57,6 +57,8 @@ export interface Track {
 }
 
 export interface Note {
+  /** 안정 식별자 — 편집/선택 추적용. 파서가 생성, 신규 노트는 nextNoteId() */
+  id: string;
   /** MIDI tick 단위 시작 위치 (PPQ 기반) */
   tick: number;
   /** MIDI tick 단위 길이 */
@@ -65,6 +67,19 @@ export interface Note {
   midi: number;
   /** 0.0 ~ 1.0 linear (Web Audio dB 변환은 재생 엔진에서) */
   velocity: number;
+}
+
+/** 편집 추적을 위한 안정 ID 생성 */
+let _noteIdCounter = 0;
+export function nextNoteId(): string {
+  _noteIdCounter += 1;
+  return `n-${Date.now().toString(36)}-${_noteIdCounter}`;
+}
+
+/** 그리드 스냅 (1/snapDenom note 단위로 tick 반올림) */
+export function quantizeTick(tick: number, ppq: number, snapDenom: number): number {
+  const step = (ppq * 4) / snapDenom; // 1/snapDenom note 의 tick 수
+  return Math.round(tick / step) * step;
 }
 
 export interface LyricEvent {

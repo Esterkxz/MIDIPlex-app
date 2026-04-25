@@ -106,12 +106,30 @@ export default function Home() {
     setMode(engine.getMode());
   };
 
+  const handleProjectChange = (next: ProjectState) => {
+    setProject(next);
+    // 재생 중이면 다음 play 때 반영 (sequencer reload 가 끊김 유발 가능). 정지 중이면 즉시 반영.
+    if (!isPlaying) {
+      try {
+        engine.applyProject(next);
+      } catch (e) {
+        console.warn('[page] applyProject 실패:', e);
+      }
+    }
+  };
+
   const handlePlayToggle = async () => {
     if (!project) return;
     if (isPlaying) {
       engine.stop();
       setIsPlaying(false);
     } else {
+      // 매번 fresh 보장 — 편집 후 첫 play 의 동기 누락 방지
+      try {
+        engine.applyProject(project);
+      } catch (e) {
+        console.warn('[page] applyProject(play) 실패:', e);
+      }
       await engine.play();
       setIsPlaying(true);
     }
@@ -162,7 +180,7 @@ export default function Home() {
             </span>
           </div>
 
-          <PianoRoll project={project} currentTime={currentTime} />
+          <PianoRoll project={project} currentTime={currentTime} onProjectChange={handleProjectChange} />
 
           <details className="text-sm text-gray-600 max-w-3xl w-full">
             <summary className="cursor-pointer">트랙 정보</summary>
@@ -178,7 +196,7 @@ export default function Home() {
       )}
 
       <footer className="mt-8 text-xs text-gray-400 text-center">
-        Phase 2 MVP — M1 (업로드) · M2 (파싱) · M3 (피아노롤) · M4/M5 (재생 + 사운드폰트) — `MIDIPlex/.agent/PM/003_WBS.md`
+        Phase 2 MVP — M1 (업로드) · M2 (파싱) · M3 (피아노롤) · M4/M5 (재생 + 사운드폰트) · M6 (편집: 선택/연필/지우개/드래그/마키/Delete) — `MIDIPlex/.agent/PM/003_WBS.md`
         <br />
         ADR 0001 v1.1 + ADR 0006 + lesson 002·003·004 회피.
       </footer>

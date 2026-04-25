@@ -1,6 +1,7 @@
 import * as Tone from 'tone';
-import type { Midi } from '@tonejs/midi';
+import { Midi } from '@tonejs/midi';
 import { WorkletSynthesizer, Sequencer } from 'spessasynth_lib';
+import type { ProjectState } from './types/project';
 
 /**
  * MIDIPlex 오디오 엔진 (Phase 2 MVP).
@@ -39,6 +40,22 @@ export class AudioEngine {
     this.midiBuffer = buffer;
     if (fileName) this.midiFileName = fileName;
     this.stop();
+    this.tryLoadIntoSequencer();
+  }
+
+  /**
+   * 편집된 ProjectState 를 SMF 로 재직렬화 → Sequencer/Tone.Transport 양쪽에 반영.
+   * M6 편집 → 재생 엔진 동기 (WBS 6.5).
+   *
+   * 호출 시점: 사용자가 재생 누를 때 (page.tsx 가 매번 fresh 보장).
+   * 재생 중 호출 시 sequencer.loadNewSongList 가 끊김 유발 가능 → stop 후 호출 권장.
+   */
+  applyProject(project: ProjectState) {
+    const midi = projectToMidi(project);
+    const u8 = midi.toArray();
+    const buffer = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+    this.midi = midi;
+    this.midiBuffer = buffer;
     this.tryLoadIntoSequencer();
   }
 
@@ -239,4 +256,67 @@ export class AudioEngine {
   isSoundFontLoaded(): boolean {
     return this.soundFontLoaded;
   }
+}
+
+/**
+ * ProjectState → @tonejs/midi Midi 객체 변환.
+ * 편집 후 SMF 재직렬화용 (applyProject 가 사용).
+ *
+ * @tonejs/midi 의 header.ppq 는 readonly — 직접 대입 불가. fromJSON 경유로 ppq 보존.
+ */
+function projectToMidi(project: ProjectState): Midi {
+  const tsMatch = /^(\d+)\/(\d+)$/.exec(project.timeSignature);
+  const timeSignatures = tsMatch
+    ? [
+        {
+          ticks: 0,
+          timeSignature: [parseInt(tsMatch[1], 10), parseInt(tsMatch[2], 10)] as [number, number],
+          measures: 0,
+        },
+      ]
+    : [];
+
+  const json = {
+    header: {
+      name: project.title,
+      ppq: project.ppq,
+      tempos: [{ ticks: 0, bpm: project.bpm, time: 0 }],
+      timeSignatures,
+      keySignatures: [],
+      meta: [],
+    },
+    tracks: project.tracks.map((track) => {
+      const instMatch = /instrument-(\d+)/.exec(track.instrumentId ?? '');
+      const programNum = instMatch ? parseInt(instMatch[1], 10) : 0;
+      const ticksPerSec = (project.bpm * project.ppq) / 60;
+      return {
+        name: track.name,
+        channel: track.channel,
+        instrument: {
+          number: programNum,
+          family: '',
+          name: '',
+          percussion: track.channel === 9,
+        },
+        notes: (track.notes ?? []).map((n) => ({
+          midi: n.midi,
+          ticks: n.tick,
+          durationTicks: n.durationTicks,
+          velocity: n.velocity,
+          time: n.tick / ticksPerSec,
+          duration: n.durationTicks / ticksPerSec,
+          name: '',
+          noteOffVelocity: 0,
+        })),
+        controlChanges: {},
+        pitchBends: [],
+        endOfTrackTicks: 0,
+      };
+    }),
+  };
+
+  const midi = new Midi();
+  // @tonejs/midi 의 fromJSON 시그니처가 strict — 우리 JSON 은 일부 메타 누락 → unknown 으로 cast
+  (midi as unknown as { fromJSON: (j: unknown) => void }).fromJSON(json);
+  return midi;
 }

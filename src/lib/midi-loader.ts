@@ -1,5 +1,6 @@
 import { Midi } from '@tonejs/midi';
 import type { ProjectState, Track, Note, InstrumentRef } from './types/project';
+import { nextNoteId } from './types/project';
 
 /**
  * @tonejs/midi 의 Midi 객체 → 도메인 ProjectState 변환.
@@ -44,6 +45,7 @@ function loadTrack(
     // 명시 복사 — getter 결과 보존 (lesson 002)
     notes: track.notes.map(
       (n): Note => ({
+        id: nextNoteId(),
         tick: n.ticks,
         durationTicks: n.durationTicks,
         midi: n.midi,

@@ -1,71 +1,135 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ProjectState } from '@/lib/types/project';
-import { tickToSeconds } from '@/lib/types/project';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import type { ProjectState, Note } from '@/lib/types/project';
+import { tickToSeconds, secondsToTick, quantizeTick, nextNoteId } from '@/lib/types/project';
 
 type Props = {
   project: ProjectState;
   currentTime?: number;
+  onProjectChange?: (next: ProjectState) => void;
 };
+
+type Tool = 'select' | 'pencil' | 'eraser';
+
+type DragState =
+  | {
+      kind: 'move';
+      startX: number; // CSS px
+      startY: number;
+      startTime: number; // sec
+      startPitch: number; // midi
+      currentX: number;
+      currentY: number;
+      // 시작 시점의 선택 노트 스냅샷 (트랙 인덱스 + 노트 인덱스 + 원본 tick/midi)
+      initial: Array<{ trackIndex: number; noteIndex: number; tick: number; midi: number }>;
+      moved: boolean; // threshold 넘은 적 있는가
+    }
+  | {
+      kind: 'marquee';
+      startX: number;
+      startY: number;
+      currentX: number;
+      currentY: number;
+      additive: boolean; // ctrl
+    }
+  | {
+      kind: 'pencil-create';
+      startX: number;
+      startY: number;
+      currentX: number;
+      currentY: number;
+      noteId: string;
+      trackIndex: number;
+      noteIndex: number;
+      anchorTick: number;
+      anchorMidi: number;
+    };
 
 const TRACK_COLORS = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b',
   '#8b5cf6', '#ec4899', '#14b8a6', '#f97316',
 ];
 
-// scale 한계
-const MIN_X_SCALE = 5;     // px/sec — 매우 압축
-const MAX_X_SCALE = 1500;  // px/sec — 매우 확대
+const MIN_X_SCALE = 5;
+const MAX_X_SCALE = 1500;
 const MIN_PITCH_HEIGHT = 2;
 const MAX_PITCH_HEIGHT = 40;
 
-const DEFAULT_X_SCALE = 80;       // px/sec
-const DEFAULT_PITCH_HEIGHT = 8;   // px per pitch
+const DEFAULT_X_SCALE = 80;
+const DEFAULT_PITCH_HEIGHT = 8;
 
-const HEADER_PX = 22;     // 상단 메타 영역
-const KEY_LABEL_PX = 32;  // 좌측 옥타브 라벨
+const HEADER_PX = 22;
+const KEY_LABEL_PX = 32;
 
-export default function PianoRoll({ project, currentTime = 0 }: Props) {
+const DRAG_THRESHOLD_PX = 4;
+
+type FlatNote = {
+  id: string;
+  tick: number;
+  durationTicks: number;
+  midi: number;
+  velocity: number;
+  trackIndex: number;
+  noteIndex: number;
+};
+
+export default function PianoRoll({ project, currentTime = 0, onProjectChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // viewport 상태
+  // viewport
   const [containerSize, setContainerSize] = useState({ w: 800, h: 400 });
   const [xScale, setXScale] = useState(DEFAULT_X_SCALE);
   const [pitchHeight, setPitchHeight] = useState(DEFAULT_PITCH_HEIGHT);
-  const [scrollX, setScrollX] = useState(0); // sec
-  const [scrollY, setScrollY] = useState(0); // pitch
+  const [scrollX, setScrollX] = useState(0);
+  const [scrollY, setScrollY] = useState(0);
   const [autoFollow, setAutoFollow] = useState(true);
 
-  // 곡 메타
-  const allNotes = project.tracks.flatMap((track, trackIndex) =>
-    (track.notes ?? []).map((n) => ({
+  // 편집 상태
+  const [tool, setTool] = useState<Tool>('select');
+  const [snapDenom, setSnapDenom] = useState<number>(16); // 1/16 default
+  const [activeTrack, setActiveTrack] = useState<number>(0);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [dragState, setDragState] = useState<DragState | null>(null);
+
+  // 메타
+  const allNotes: FlatNote[] = project.tracks.flatMap((track, trackIndex) =>
+    (track.notes ?? []).map((n, noteIndex) => ({
+      id: n.id,
       tick: n.tick,
       durationTicks: n.durationTicks,
       midi: n.midi,
       velocity: n.velocity,
       trackIndex,
+      noteIndex,
     })),
   );
   const totalDuration = Math.max(project.durationSeconds, 0.001);
   const minPitch = allNotes.length ? Math.min(...allNotes.map((n) => n.midi)) : 60;
   const maxPitch = allNotes.length ? Math.max(...allNotes.map((n) => n.midi)) : 72;
 
-  // 노트 시간 변환 헬퍼
-  const noteToSec = (tick: number) => tickToSeconds(tick, project.ppq, project.bpm);
+  const noteToSec = useCallback(
+    (tick: number) => tickToSeconds(tick, project.ppq, project.bpm),
+    [project.ppq, project.bpm],
+  );
 
-  // 새 곡 로드 시 scrollY 초기화 (가장 낮은 노트 기준)
+  // 새 곡 로드 시 viewport 초기화 + 선택 해제 + 활성 트랙 보정
   useEffect(() => {
     setScrollX(0);
     setScrollY(Math.max(0, minPitch - 6));
-    // 곡 전체가 viewport 에 들어가도록 초기 xScale 자동 조정 (그러나 최소값 보장)
     const w = containerRef.current?.clientWidth ?? 800;
     const fitScale = Math.max(MIN_X_SCALE, (w - KEY_LABEL_PX) / totalDuration);
     setXScale(Math.min(fitScale, DEFAULT_X_SCALE));
-  }, [project.id, totalDuration, minPitch]);
+    setSelection(new Set());
+    setDragState(null);
+    // 활성 트랙: 첫 노트 트랙
+    const firstWithNotes = project.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
+    setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
-  // ResizeObserver — 부모 컨테이너 크기 추적
+  // ResizeObserver
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -80,11 +144,11 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  // playhead auto-follow — 재생 중 viewport 우측 도달 시 점프
+  // playhead auto-follow
   useEffect(() => {
     if (!autoFollow || currentTime <= 0) return;
     const visibleSec = (containerSize.w - KEY_LABEL_PX) / xScale;
-    const followMargin = visibleSec * 0.1; // 우측 10% 마진에서 trigger
+    const followMargin = visibleSec * 0.1;
     if (currentTime >= scrollX + visibleSec - followMargin) {
       setScrollX(Math.max(0, currentTime - visibleSec * 0.2));
     }
@@ -93,7 +157,47 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
     }
   }, [currentTime, autoFollow, scrollX, xScale, containerSize.w]);
 
-  // 그리기
+  // ----- 좌표 변환 -----
+  const rollX0 = KEY_LABEL_PX;
+  const rollY0 = HEADER_PX;
+  const rollW = containerSize.w - rollX0;
+  const rollH = containerSize.h - rollY0;
+
+  const cssToTime = useCallback(
+    (cssX: number) => Math.max(0, scrollX + (cssX - rollX0) / xScale),
+    [scrollX, xScale, rollX0],
+  );
+  const cssToPitch = useCallback(
+    (cssY: number) => {
+      const fromTop = cssY - rollY0;
+      const pitchOffsetFromBottom = (rollH - fromTop) / pitchHeight;
+      return Math.max(0, Math.min(127, Math.floor(scrollY + pitchOffsetFromBottom)));
+    },
+    [scrollY, pitchHeight, rollY0, rollH],
+  );
+
+  // hit-test (top-most first)
+  const hitTestNote = useCallback(
+    (cssX: number, cssY: number): FlatNote | null => {
+      for (let i = allNotes.length - 1; i >= 0; i--) {
+        const n = allNotes[i];
+        const ns = noteToSec(n.tick);
+        const nd = noteToSec(n.durationTicks);
+        const ne = ns + nd;
+        const xLeft = rollX0 + (ns - scrollX) * xScale;
+        const xRight = rollX0 + (ne - scrollX) * xScale;
+        const yTop = rollY0 + rollH - (n.midi - scrollY + 1) * pitchHeight;
+        const yBot = yTop + Math.max(pitchHeight - 1, 2);
+        if (cssX >= xLeft && cssX <= xRight && cssY >= yTop && cssY <= yBot) {
+          return n;
+        }
+      }
+      return null;
+    },
+    [allNotes, noteToSec, scrollX, scrollY, xScale, pitchHeight, rollX0, rollY0, rollH],
+  );
+
+  // ----- 그리기 -----
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -107,31 +211,17 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
     canvas.height = Math.max(cssH * dpr, 1);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // 배경
     ctx.fillStyle = '#fafafa';
     ctx.fillRect(0, 0, cssW, cssH);
-
-    if (allNotes.length === 0) {
-      ctx.fillStyle = '#666';
-      ctx.font = '14px sans-serif';
-      ctx.fillText('(노트 없음)', 10, 20);
-      return;
-    }
-
-    const rollX0 = KEY_LABEL_PX;
-    const rollY0 = HEADER_PX;
-    const rollW = cssW - rollX0;
-    const rollH = cssH - rollY0;
 
     const visibleSec = rollW / xScale;
     const visiblePitches = Math.floor(rollH / pitchHeight);
 
-    // 시간축 그리드 (1초 / zoom 따라 단위 가변)
+    // 시간 그리드
     const gridStep =
       xScale > 200 ? 0.25 :
       xScale > 80 ? 1 :
-      xScale > 30 ? 4 :
-      8; // sec
+      xScale > 30 ? 4 : 8;
     ctx.strokeStyle = '#e5e5e5';
     ctx.lineWidth = 1;
     ctx.font = '10px sans-serif';
@@ -147,8 +237,7 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
       ctx.fillText(`${t.toFixed(t < 10 ? 1 : 0)}s`, x + 2, rollY0 - 6);
     }
 
-    // 피치축 그리드 + 옥타브 라벨
-    ctx.strokeStyle = '#eee';
+    // 피치 그리드
     for (let p = scrollY; p <= scrollY + visiblePitches + 1; p++) {
       const isC = p % 12 === 0;
       const y = rollY0 + rollH - (p - scrollY) * pitchHeight;
@@ -165,26 +254,71 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
       }
     }
 
+    // 드래그 중인 move 의 delta 계산 (preview 용)
+    let moveDeltaTick = 0;
+    let moveDeltaMidi = 0;
+    if (dragState?.kind === 'move' && dragState.moved) {
+      const dx = dragState.currentX - dragState.startX;
+      const dy = dragState.currentY - dragState.startY;
+      const deltaSec = dx / xScale;
+      const rawDeltaTick = secondsToTick(deltaSec, project.ppq, project.bpm);
+      const step = (project.ppq * 4) / snapDenom;
+      moveDeltaTick = Math.round(rawDeltaTick / step) * step;
+      moveDeltaMidi = -Math.round(dy / pitchHeight);
+    }
+
     // 노트 (viewport culling)
     const tEnd = scrollX + visibleSec;
     const pEnd = scrollY + visiblePitches + 1;
     for (const note of allNotes) {
-      const ns = noteToSec(note.tick);
+      const isSel = selection.has(note.id);
+      // move preview 적용
+      let drawTick = note.tick;
+      let drawMidi = note.midi;
+      if (isSel && dragState?.kind === 'move') {
+        drawTick = note.tick + moveDeltaTick;
+        drawMidi = note.midi + moveDeltaMidi;
+      }
+      const ns = noteToSec(drawTick);
       const nd = noteToSec(note.durationTicks);
       const ne = ns + nd;
       if (ne < scrollX || ns > tEnd) continue;
-      if (note.midi < scrollY - 1 || note.midi > pEnd) continue;
+      if (drawMidi < scrollY - 1 || drawMidi > pEnd) continue;
 
       const x = rollX0 + (ns - scrollX) * xScale;
       const w = Math.max(nd * xScale, 2);
-      const y = rollY0 + rollH - (note.midi - scrollY + 1) * pitchHeight;
+      const y = rollY0 + rollH - (drawMidi - scrollY + 1) * pitchHeight;
+      const h = Math.max(pitchHeight - 1, 2);
 
       const v = Number.isFinite(note.velocity) ? Math.max(0, Math.min(1, note.velocity)) : 0.7;
       ctx.fillStyle = TRACK_COLORS[note.trackIndex % TRACK_COLORS.length];
       ctx.globalAlpha = 0.55 + v * 0.45;
-      ctx.fillRect(x, y, w, Math.max(pitchHeight - 1, 2));
+      ctx.fillRect(x, y, w, h);
+
+      if (isSel) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+      }
     }
     ctx.globalAlpha = 1;
+
+    // 마키 사각형
+    if (dragState?.kind === 'marquee') {
+      const x = Math.min(dragState.startX, dragState.currentX);
+      const y = Math.min(dragState.startY, dragState.currentY);
+      const w = Math.abs(dragState.currentX - dragState.startX);
+      const h = Math.abs(dragState.currentY - dragState.startY);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+    }
 
     // playhead
     if (currentTime > 0 && currentTime <= totalDuration) {
@@ -206,15 +340,15 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
       }
     }
 
-    // 헤더 메타
+    // 헤더
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, cssW, HEADER_PX);
     ctx.fillStyle = '#333';
     ctx.font = '11px sans-serif';
-    const meta = `${allNotes.length} notes · pitch ${minPitch}-${maxPitch} · ${totalDuration.toFixed(1)}s · ${xScale.toFixed(0)}px/s · ${pitchHeight}px/pitch · t=[${scrollX.toFixed(1)}, ${(scrollX + visibleSec).toFixed(1)}]`;
+    const meta = `${allNotes.length} notes · sel ${selection.size} · pitch ${minPitch}-${maxPitch} · ${totalDuration.toFixed(1)}s · ${xScale.toFixed(0)}px/s · t=[${scrollX.toFixed(1)}, ${(scrollX + visibleSec).toFixed(1)}]`;
     ctx.fillText(meta, 8, 14);
 
-    // 좌측 라벨 영역 배경
+    // 좌측 라벨 영역
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, rollY0, KEY_LABEL_PX, rollH);
     ctx.strokeStyle = '#ccc';
@@ -223,26 +357,250 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
     ctx.lineTo(KEY_LABEL_PX, rollY0 + rollH);
     ctx.stroke();
   }, [
-    project.id,
-    project.ppq,
-    project.bpm,
-    project.tracks,
-    currentTime,
-    containerSize.w,
-    containerSize.h,
-    xScale,
-    pitchHeight,
-    scrollX,
-    scrollY,
+    allNotes, selection, dragState,
+    project.ppq, project.bpm, snapDenom,
+    currentTime, totalDuration,
+    containerSize.w, containerSize.h,
+    xScale, pitchHeight, scrollX, scrollY,
+    rollW, rollH, noteToSec, minPitch, maxPitch,
   ]);
 
-  // wheel: 가로 스크롤 / shift = 세로 / ctrl = x zoom / alt = y zoom
+  // ----- 마우스 핸들러 -----
+
+  const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = containerRef.current!.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.button !== 2) return; // left or right
+    const { x, y } = getCanvasCoords(e);
+    if (x < rollX0 || y < rollY0) return; // 라벨/헤더 영역 무시
+
+    const hit = hitTestNote(x, y);
+
+    // 우클릭: 어디든 노트 위면 즉시 삭제 (eraser shortcut)
+    if (e.button === 2) {
+      e.preventDefault();
+      if (hit) {
+        deleteNotes([hit.id]);
+      }
+      return;
+    }
+
+    // tool 별 분기
+    if (tool === 'eraser') {
+      if (hit) deleteNotes([hit.id]);
+      return;
+    }
+
+    if (tool === 'pencil') {
+      if (hit) {
+        // pencil 도 노트 위 클릭 시 선택만 (실수 add 방지)
+        setSelection(new Set([hit.id]));
+        return;
+      }
+      // 빈 공간 → 신규 노트 생성 + drag 로 길이 조절
+      const tick = quantizeTick(secondsToTick(cssToTime(x), project.ppq, project.bpm), project.ppq, snapDenom);
+      const midi = cssToPitch(y);
+      const step = (project.ppq * 4) / snapDenom;
+      const newId = nextNoteId();
+
+      // active 트랙에 추가
+      const trackIdx = Math.max(0, Math.min(project.tracks.length - 1, activeTrack));
+      const track = project.tracks[trackIdx];
+      if (!track) return;
+      const newNote: Note = {
+        id: newId,
+        tick,
+        durationTicks: step,
+        midi,
+        velocity: 0.7,
+      };
+      const nextTracks = project.tracks.map((t, i) =>
+        i === trackIdx ? { ...t, notes: [...(t.notes ?? []), newNote] } : t,
+      );
+      const noteIdx = (track.notes?.length ?? 0);
+      commitProject({ ...project, tracks: nextTracks, modifiedAt: new Date().toISOString() });
+      setSelection(new Set([newId]));
+      setDragState({
+        kind: 'pencil-create',
+        startX: x, startY: y, currentX: x, currentY: y,
+        noteId: newId,
+        trackIndex: trackIdx,
+        noteIndex: noteIdx,
+        anchorTick: tick,
+        anchorMidi: midi,
+      });
+      return;
+    }
+
+    // tool === 'select'
+    if (hit) {
+      // 클릭 시 선택 + 드래그 시작 (move)
+      let nextSel: Set<string>;
+      if (e.ctrlKey || e.metaKey) {
+        nextSel = new Set(selection);
+        if (nextSel.has(hit.id)) nextSel.delete(hit.id);
+        else nextSel.add(hit.id);
+      } else if (selection.has(hit.id)) {
+        nextSel = selection;
+      } else {
+        nextSel = new Set([hit.id]);
+      }
+      setSelection(nextSel);
+      // initial 스냅샷
+      const initial: Array<{ trackIndex: number; noteIndex: number; tick: number; midi: number }> = [];
+      for (const fn of allNotes) {
+        if (nextSel.has(fn.id)) {
+          initial.push({ trackIndex: fn.trackIndex, noteIndex: fn.noteIndex, tick: fn.tick, midi: fn.midi });
+        }
+      }
+      setDragState({
+        kind: 'move',
+        startX: x, startY: y, currentX: x, currentY: y,
+        startTime: cssToTime(x), startPitch: cssToPitch(y),
+        initial,
+        moved: false,
+      });
+    } else {
+      // 빈 공간 → 마키
+      setDragState({
+        kind: 'marquee',
+        startX: x, startY: y, currentX: x, currentY: y,
+        additive: e.ctrlKey || e.metaKey,
+      });
+      if (!(e.ctrlKey || e.metaKey)) {
+        setSelection(new Set());
+      }
+    }
+  };
+
+  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragState) return;
+    const { x, y } = getCanvasCoords(e);
+    if (dragState.kind === 'move') {
+      const dx = x - dragState.startX;
+      const dy = y - dragState.startY;
+      const moved = dragState.moved || Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX;
+      setDragState({ ...dragState, currentX: x, currentY: y, moved });
+    } else if (dragState.kind === 'marquee') {
+      setDragState({ ...dragState, currentX: x, currentY: y });
+    } else if (dragState.kind === 'pencil-create') {
+      setDragState({ ...dragState, currentX: x, currentY: y });
+    }
+  };
+
+  const onMouseUp = () => {
+    if (!dragState) return;
+
+    if (dragState.kind === 'move' && dragState.moved) {
+      const dx = dragState.currentX - dragState.startX;
+      const dy = dragState.currentY - dragState.startY;
+      const deltaSec = dx / xScale;
+      const rawDeltaTick = secondsToTick(deltaSec, project.ppq, project.bpm);
+      const step = (project.ppq * 4) / snapDenom;
+      const deltaTick = Math.round(rawDeltaTick / step) * step;
+      const deltaMidi = -Math.round(dy / pitchHeight);
+
+      if (deltaTick !== 0 || deltaMidi !== 0) {
+        const nextTracks = project.tracks.map((t) => ({
+          ...t,
+          notes: t.notes?.map((n) =>
+            selection.has(n.id)
+              ? {
+                  ...n,
+                  tick: Math.max(0, n.tick + deltaTick),
+                  midi: Math.max(0, Math.min(127, n.midi + deltaMidi)),
+                }
+              : n,
+          ),
+        }));
+        commitProject({ ...project, tracks: nextTracks, modifiedAt: new Date().toISOString() });
+      }
+    } else if (dragState.kind === 'marquee') {
+      // 마키 안의 노트 선택
+      const x0 = Math.min(dragState.startX, dragState.currentX);
+      const x1 = Math.max(dragState.startX, dragState.currentX);
+      const y0 = Math.min(dragState.startY, dragState.currentY);
+      const y1 = Math.max(dragState.startY, dragState.currentY);
+      const newSel = dragState.additive ? new Set(selection) : new Set<string>();
+      for (const n of allNotes) {
+        const ns = noteToSec(n.tick);
+        const nd = noteToSec(n.durationTicks);
+        const ne = ns + nd;
+        const xLeft = rollX0 + (ns - scrollX) * xScale;
+        const xRight = rollX0 + (ne - scrollX) * xScale;
+        const yTop = rollY0 + rollH - (n.midi - scrollY + 1) * pitchHeight;
+        const yBot = yTop + Math.max(pitchHeight - 1, 2);
+        // 사각형 교차
+        if (xRight < x0 || xLeft > x1 || yBot < y0 || yTop > y1) continue;
+        newSel.add(n.id);
+      }
+      setSelection(newSel);
+    } else if (dragState.kind === 'pencil-create') {
+      // duration 확정
+      const dx = dragState.currentX - dragState.startX;
+      if (dx > DRAG_THRESHOLD_PX) {
+        const deltaSec = dx / xScale;
+        const rawDeltaTick = secondsToTick(deltaSec, project.ppq, project.bpm);
+        const step = (project.ppq * 4) / snapDenom;
+        const newDur = Math.max(step, Math.round(rawDeltaTick / step) * step);
+        const nextTracks = project.tracks.map((t, i) =>
+          i === dragState.trackIndex
+            ? {
+                ...t,
+                notes: t.notes?.map((n) => (n.id === dragState.noteId ? { ...n, durationTicks: newDur } : n)),
+              }
+            : t,
+        );
+        commitProject({ ...project, tracks: nextTracks, modifiedAt: new Date().toISOString() });
+      }
+    }
+    setDragState(null);
+  };
+
+  // 키 이벤트 — Delete/Backspace
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selection.size > 0) {
+        e.preventDefault();
+        deleteNotes([...selection]);
+      } else if (e.key === 'Escape') {
+        setSelection(new Set());
+        setDragState(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, project]);
+
+  const commitProject = (next: ProjectState) => {
+    onProjectChange?.(next);
+  };
+
+  const deleteNotes = (ids: string[]) => {
+    const idSet = new Set(ids);
+    const nextTracks = project.tracks.map((t) => ({
+      ...t,
+      notes: t.notes?.filter((n) => !idSet.has(n.id)),
+    }));
+    commitProject({ ...project, tracks: nextTracks, modifiedAt: new Date().toISOString() });
+    setSelection((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  };
+
+  // ----- 휠 -----
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const dy = e.deltaY;
-
     if (e.ctrlKey || e.metaKey) {
-      // 가로 zoom — 마우스 위치 기준
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const mx = e.clientX - rect.left - KEY_LABEL_PX;
@@ -250,25 +608,20 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
       const factor = dy < 0 ? 1.2 : 1 / 1.2;
       const next = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, xScale * factor));
       setXScale(next);
-      // 마우스 위치의 시간이 그대로 유지되도록 scrollX 보정
       setScrollX(Math.max(0, tUnderMouse - mx / next));
     } else if (e.altKey) {
-      // 세로 zoom
       const factor = dy < 0 ? 1.2 : 1 / 1.2;
       setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, p * factor)));
     } else if (e.shiftKey) {
-      // 세로 스크롤
       setScrollY((s) => Math.max(0, Math.min(127, s + Math.sign(dy) * 2)));
     } else {
-      // 가로 스크롤
       const visibleSec = (containerSize.w - KEY_LABEL_PX) / xScale;
       const step = visibleSec * 0.1;
       setScrollX((s) => Math.max(0, Math.min(totalDuration, s + Math.sign(dy) * step)));
-      setAutoFollow(false); // 사용자가 수동 스크롤하면 auto-follow 해제
+      setAutoFollow(false);
     }
   };
 
-  // zoom 컨트롤
   const fitAll = () => {
     const w = containerSize.w - KEY_LABEL_PX;
     setXScale(Math.max(MIN_X_SCALE, w / totalDuration));
@@ -285,9 +638,61 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
     setAutoFollow(true);
   };
 
+  const editable = !!onProjectChange;
+  const cursorClass =
+    tool === 'pencil' ? 'cursor-crosshair' :
+    tool === 'eraser' ? 'cursor-not-allowed' :
+    'cursor-default';
+
   return (
     <div className="w-full max-w-6xl flex flex-col gap-2">
-      {/* 컨트롤 바 */}
+      {/* 도구 바 */}
+      {editable && (
+        <div className="flex gap-2 items-center text-xs flex-wrap">
+          <span className="text-gray-500">도구:</span>
+          {(['select', 'pencil', 'eraser'] as Tool[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTool(t)}
+              className={`px-2 py-1 border rounded ${tool === t ? 'bg-blue-600 text-white border-blue-700' : 'hover:bg-gray-50'}`}
+            >
+              {t === 'select' ? '선택' : t === 'pencil' ? '연필' : '지우개'}
+            </button>
+          ))}
+          <span className="text-gray-500 ml-3">스냅:</span>
+          <select
+            value={snapDenom}
+            onChange={(e) => setSnapDenom(Number(e.target.value))}
+            className="px-2 py-1 border rounded bg-white"
+          >
+            {[1, 2, 4, 8, 16, 32].map((d) => (
+              <option key={d} value={d}>1/{d}</option>
+            ))}
+          </select>
+          <span className="text-gray-500 ml-3">트랙:</span>
+          <select
+            value={activeTrack}
+            onChange={(e) => setActiveTrack(Number(e.target.value))}
+            className="px-2 py-1 border rounded bg-white max-w-[180px]"
+          >
+            {project.tracks.map((t, i) => (
+              <option key={t.id} value={i}>
+                {i}: {t.name} ({t.notes?.length ?? 0})
+              </option>
+            ))}
+          </select>
+          {selection.size > 0 && (
+            <button
+              onClick={() => deleteNotes([...selection])}
+              className="px-2 py-1 border rounded hover:bg-red-50 text-red-600 ml-3"
+            >
+              선택 삭제 ({selection.size})
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 줌 컨트롤 */}
       <div className="flex gap-2 items-center text-xs flex-wrap">
         <span className="text-gray-500">시간:</span>
         <button onClick={() => setXScale((x) => Math.min(MAX_X_SCALE, x * 1.4))} className="px-2 py-1 border rounded hover:bg-gray-50">+</button>
@@ -305,16 +710,21 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
           />
           재생 시 자동 따라가기
         </label>
-        <span className="text-gray-400 ml-auto">
-          wheel = 가로스크롤 / shift+wheel = 세로 / ctrl+wheel = x zoom / alt+wheel = y zoom
+        <span className="text-gray-400 ml-auto hidden lg:inline">
+          wheel = 가로스크롤 / shift = 세로 / ctrl = x zoom / alt = y zoom
         </span>
       </div>
 
-      {/* viewport — 부모 가로 100%, 세로 resize 가능 */}
+      {/* viewport */}
       <div
         ref={containerRef}
         onWheel={handleWheel}
-        className="border border-gray-300 rounded overflow-hidden bg-white"
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={() => { if (dragState) onMouseUp(); }}
+        onContextMenu={(e) => e.preventDefault()}
+        className={`border border-gray-300 rounded overflow-hidden bg-white ${cursorClass}`}
         style={{
           width: '100%',
           height: '420px',
@@ -322,6 +732,7 @@ export default function PianoRoll({ project, currentTime = 0 }: Props) {
           minHeight: '200px',
           maxHeight: '90vh',
           position: 'relative',
+          userSelect: 'none',
         }}
       >
         <canvas
