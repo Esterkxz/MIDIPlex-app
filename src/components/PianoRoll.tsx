@@ -125,37 +125,34 @@ export default function PianoRoll({
     [project.ppq, project.bpm],
   );
 
-  // 새 곡 로드 시 viewport 리셋 — auto-fit 은 다음 effect 가 처리
-  const [autoFitDone, setAutoFitDone] = useState(false);
+  // 새 곡 로드 시 viewport 리셋 + 사용자 zoom 플래그 해제
+  const [userZoomed, setUserZoomed] = useState(false);
   useEffect(() => {
     setSelection(new Set());
     setDragState(null);
-    setAutoFitDone(false);
+    setUserZoomed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
-  // 자동 fit — 새 곡 로드 + 컨테이너 측정 안정 후 한 번 실행.
-  //   시간축: 곡 전체가 가로 100% 차지 (MIN/MAX cap 만 적용)
-  //   피치축: 모든 노트가 보이면서 최대한 확대 — 세로 95% 차지하도록 cap 없이 계산
-  // 컨테이너 측정값이 너무 작으면 (mount 직후 layout 미완) 무시하고 다음 ResizeObserver
-  // 콜백을 기다림.
+  // 자동 fit — 사용자가 직접 zoom 한 적 없을 때 컨테이너 측정 변할 때마다 재계산.
+  //   시간축: 곡 전체가 가로 100% 차지
+  //   피치축: 모든 노트가 보이면서 최대한 확대 — 세로 95% 차지 (cap 없음)
+  // ResizeObserver 가 첫 callback 에서 작은 값을 보고했더라도, layout 안정 후 큰 값
+  // 들어오면 다시 fit. 사용자가 직접 zoom 하면 그 시점 plag 세팅 → 자동 fit 중단.
   useEffect(() => {
-    if (autoFitDone) return;
-    if (containerSize.w < 200 || containerSize.h < 200) return;
+    if (userZoomed) return;
+    if (containerSize.w < 100 || containerSize.h < 100) return;
     if (allNotes.length === 0) return;
     const w = containerSize.w - KEY_LABEL_PX;
     const fitX = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, w / totalDuration));
     setXScale(fitX);
     setScrollX(0);
-    // pitch padding: 위아래 2 키씩 (총 4). pitchRange 가 너무 좁아도 그대로 — fitPH 가 커질 뿐.
     const pitchRange = Math.max(maxPitch - minPitch + 4, 1);
     const targetH = (containerSize.h - HEADER_PX) * 0.95;
-    // MAX_PITCH_HEIGHT cap 적용 안 함 — 좁은 음역 곡은 한 키가 크게 그려지는 게 맞음
     const fitPH = Math.max(MIN_PITCH_HEIGHT, targetH / pitchRange);
     setPitchHeight(fitPH);
     setScrollY(Math.max(0, minPitch - 2));
-    setAutoFitDone(true);
-  }, [autoFitDone, containerSize.w, containerSize.h, allNotes.length, totalDuration, minPitch, maxPitch]);
+  }, [userZoomed, containerSize.w, containerSize.h, allNotes.length, totalDuration, minPitch, maxPitch]);
 
   // ResizeObserver
   useLayoutEffect(() => {
@@ -641,9 +638,11 @@ export default function PianoRoll({
         const next = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, xScale * factor));
         setXScale(next);
         setScrollX(Math.max(0, tUnderMouse - mx / next));
+        setUserZoomed(true);
       } else if (e.altKey) {
         const factor = dy < 0 ? 1.2 : 1 / 1.2;
         setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, p * factor)));
+        setUserZoomed(true);
       } else if (e.shiftKey) {
         setScrollY((s) => Math.max(0, Math.min(127, s + Math.sign(dy) * 2)));
       } else {
@@ -720,13 +719,13 @@ export default function PianoRoll({
       {/* 줌 컨트롤 */}
       <div className="flex gap-2 items-center text-xs flex-wrap">
         <span className="text-gray-500">시간:</span>
-        <button onClick={() => setXScale((x) => Math.min(MAX_X_SCALE, x * 1.4))} className="px-2 py-1 border rounded hover:bg-gray-50">+</button>
-        <button onClick={() => setXScale((x) => Math.max(MIN_X_SCALE, x / 1.4))} className="px-2 py-1 border rounded hover:bg-gray-50">−</button>
+        <button onClick={() => { setXScale((x) => Math.min(MAX_X_SCALE, x * 1.4)); setUserZoomed(true); }} className="px-2 py-1 border rounded hover:bg-gray-50">+</button>
+        <button onClick={() => { setXScale((x) => Math.max(MIN_X_SCALE, x / 1.4)); setUserZoomed(true); }} className="px-2 py-1 border rounded hover:bg-gray-50">−</button>
         <span className="text-gray-500 ml-3">피치:</span>
-        <button onClick={() => setPitchHeight((p) => Math.min(MAX_PITCH_HEIGHT, p * 1.3))} className="px-2 py-1 border rounded hover:bg-gray-50">+</button>
-        <button onClick={() => setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, p / 1.3))} className="px-2 py-1 border rounded hover:bg-gray-50">−</button>
-        <button onClick={fitAll} className="px-2 py-1 border rounded hover:bg-gray-50 ml-3">전체</button>
-        <button onClick={resetZoom} className="px-2 py-1 border rounded hover:bg-gray-50">리셋</button>
+        <button onClick={() => { setPitchHeight((p) => Math.min(MAX_PITCH_HEIGHT, p * 1.3)); setUserZoomed(true); }} className="px-2 py-1 border rounded hover:bg-gray-50">+</button>
+        <button onClick={() => { setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, p / 1.3)); setUserZoomed(true); }} className="px-2 py-1 border rounded hover:bg-gray-50">−</button>
+        <button onClick={() => { fitAll(); setUserZoomed(false); }} className="px-2 py-1 border rounded hover:bg-gray-50 ml-3">전체</button>
+        <button onClick={() => { resetZoom(); setUserZoomed(true); }} className="px-2 py-1 border rounded hover:bg-gray-50">리셋</button>
         <label className="flex items-center gap-1 ml-3 text-gray-600">
           <input
             type="checkbox"
