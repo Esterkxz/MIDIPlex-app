@@ -8,6 +8,22 @@ import { nextNoteId } from './types/project';
  * ⚠️ lesson 002 (spread getter 함정) 회피: Note 의 prototype getter (time, duration, name)
  * 은 spread `{...n}` 에서 누락. 본 함수는 명시적으로 필요한 필드만 복사.
  */
+/**
+ * 의미 있는 트랙 — 노트, ControlChange, PitchBend 중 하나라도 있는 트랙.
+ * SMF format 1 은 보통 트랙 0 이 conductor (tempo/timeSig/marker 메타만), 다른 트랙들에
+ * 노트가 들어가는 컨벤션. 또한 일부 DAW 가 미사용 빈 트랙 (이름만 있는 placeholder) 도
+ * 출력. 이런 트랙들은 ProjectState 에서 제외하고 header 메타만 활용.
+ */
+function isMeaningfulTrack(t: Midi['tracks'][number]): boolean {
+  const notes = t.notes?.length ?? 0;
+  const cc = Object.values(t.controlChanges ?? {}).reduce(
+    (s, arr) => s + ((arr as unknown[])?.length ?? 0),
+    0,
+  );
+  const pb = (t.pitchBends as unknown as { length: number } | undefined)?.length ?? 0;
+  return notes > 0 || cc > 0 || pb > 0;
+}
+
 export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: ProjectState } {
   const midi = new Midi(buffer);
 
@@ -22,15 +38,19 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
       0,
     );
     const pbCount = (t.pitchBends as unknown as { length: number } | undefined)?.length ?? 0;
+    const meaningful = isMeaningfulTrack(t);
     console.log(
       `  [track ${i}] name="${t.name ?? ''}" ch=${t.channel ?? '?'} ` +
         `prog=${t.instrument?.number ?? '?'} (${t.instrument?.name ?? ''}) ` +
         `family=${t.instrument?.family ?? '?'} percussion=${t.instrument?.percussion ?? false} ` +
-        `notes=${t.notes?.length ?? 0} cc=${ccCount} pb=${pbCount}`,
+        `notes=${t.notes?.length ?? 0} cc=${ccCount} pb=${pbCount}` +
+        (meaningful ? '' : ' [SKIP empty]'),
     );
   });
 
-  // 한 번에 ProjectState 직렬화 — Note 의 getter 들을 명시 호출
+  // 빈 트랙 (conductor + DAW placeholder) 필터링 → 의미 있는 음악 트랙만 ProjectState 로
+  const meaningfulRaw = midi.tracks.filter(isMeaningfulTrack);
+
   const project: ProjectState = {
     id: cryptoRandomId(),
     title: midi.name || '(이름 없음)',
@@ -42,13 +62,14 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
     bpm: midi.header.tempos[0]?.bpm ?? 120,
     durationSeconds: midi.duration,
     instruments: extractInstruments(midi),
-    tracks: midi.tracks.map((t, i) => loadTrack(t, i, midi.header.ppq)),
+    tracks: meaningfulRaw.map((t, i) => loadTrack(t, i, midi.header.ppq)),
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
   };
 
   console.log(
-    `[midi-loader] ProjectState ready: ${project.tracks.length} tracks, ` +
+    `[midi-loader] ProjectState ready: ${project.tracks.length} tracks ` +
+      `(filtered ${midi.tracks.length - project.tracks.length} empty), ` +
       `total notes=${project.tracks.reduce((s, t) => s + (t.notes?.length ?? 0), 0)}`,
   );
 
