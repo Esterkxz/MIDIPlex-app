@@ -180,7 +180,12 @@ export default function Home() {
             </span>
           </div>
 
-          <PianoRoll project={project} currentTime={currentTime} onProjectChange={handleProjectChange} />
+          <PianoRoll
+            project={project}
+            currentTime={currentTime}
+            onProjectChange={handleProjectChange}
+            onPreviewNote={(midi, velocity, channel) => engine.previewNote(midi, velocity, channel)}
+          />
 
           <details className="text-sm text-gray-600 max-w-3xl w-full">
             <summary className="cursor-pointer">트랙 정보</summary>

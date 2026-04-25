@@ -8,6 +8,8 @@ type Props = {
   project: ProjectState;
   currentTime?: number;
   onProjectChange?: (next: ProjectState) => void;
+  /** 연필로 노트 그을 때 즉시 미리듣기 (M6 편집 UX). */
+  onPreviewNote?: (midi: number, velocity?: number, channel?: number) => void;
 };
 
 type Tool = 'select' | 'pencil' | 'eraser';
@@ -74,7 +76,7 @@ type FlatNote = {
   noteIndex: number;
 };
 
-export default function PianoRoll({ project, currentTime = 0, onProjectChange }: Props) {
+export default function PianoRoll({ project, currentTime = 0, onProjectChange, onPreviewNote }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -423,6 +425,8 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange }:
       const noteIdx = (track.notes?.length ?? 0);
       commitProject({ ...project, tracks: nextTracks, modifiedAt: new Date().toISOString() });
       setSelection(new Set([newId]));
+      // 즉시 미리듣기
+      onPreviewNote?.(midi, 0.8, track.channel ?? 0);
       setDragState({
         kind: 'pencil-create',
         startX: x, startY: y, currentX: x, currentY: y,
@@ -596,31 +600,36 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange }:
     });
   };
 
-  // ----- 휠 -----
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const dy = e.deltaY;
-    if (e.ctrlKey || e.metaKey) {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const mx = e.clientX - rect.left - KEY_LABEL_PX;
-      const tUnderMouse = scrollX + mx / xScale;
-      const factor = dy < 0 ? 1.2 : 1 / 1.2;
-      const next = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, xScale * factor));
-      setXScale(next);
-      setScrollX(Math.max(0, tUnderMouse - mx / next));
-    } else if (e.altKey) {
-      const factor = dy < 0 ? 1.2 : 1 / 1.2;
-      setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, p * factor)));
-    } else if (e.shiftKey) {
-      setScrollY((s) => Math.max(0, Math.min(127, s + Math.sign(dy) * 2)));
-    } else {
-      const visibleSec = (containerSize.w - KEY_LABEL_PX) / xScale;
-      const step = visibleSec * 0.1;
-      setScrollX((s) => Math.max(0, Math.min(totalDuration, s + Math.sign(dy) * step)));
-      setAutoFollow(false);
-    }
-  };
+  // ----- 휠 (native listener — React onWheel 은 passive 라 preventDefault 안 먹음) -----
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const dy = e.deltaY;
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        const mx = e.clientX - rect.left - KEY_LABEL_PX;
+        const tUnderMouse = scrollX + mx / xScale;
+        const factor = dy < 0 ? 1.2 : 1 / 1.2;
+        const next = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, xScale * factor));
+        setXScale(next);
+        setScrollX(Math.max(0, tUnderMouse - mx / next));
+      } else if (e.altKey) {
+        const factor = dy < 0 ? 1.2 : 1 / 1.2;
+        setPitchHeight((p) => Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, p * factor)));
+      } else if (e.shiftKey) {
+        setScrollY((s) => Math.max(0, Math.min(127, s + Math.sign(dy) * 2)));
+      } else {
+        const visibleSec = (containerSize.w - KEY_LABEL_PX) / xScale;
+        const step = visibleSec * 0.1;
+        setScrollX((s) => Math.max(0, Math.min(totalDuration, s + Math.sign(dy) * step)));
+        setAutoFollow(false);
+      }
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, [scrollX, xScale, containerSize.w, totalDuration]);
 
   const fitAll = () => {
     const w = containerSize.w - KEY_LABEL_PX;
@@ -645,7 +654,7 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange }:
     'cursor-default';
 
   return (
-    <div className="w-full max-w-6xl flex flex-col gap-2">
+    <div className="w-full flex flex-col gap-2">
       {/* 도구 바 */}
       {editable && (
         <div className="flex gap-2 items-center text-xs flex-wrap">
@@ -718,7 +727,6 @@ export default function PianoRoll({ project, currentTime = 0, onProjectChange }:
       {/* viewport */}
       <div
         ref={containerRef}
-        onWheel={handleWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
