@@ -1,6 +1,7 @@
 'use client';
 
 import type { Track } from '@/lib/types/project';
+import { getGmName, parseInstrumentId } from '@/lib/gm-instruments';
 
 const TRACK_COLORS = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b',
@@ -43,6 +44,14 @@ export default function TrackSidebar({
         {tracks.map((t, i) => {
           const isActive = i === activeIndex;
           const color = TRACK_COLORS[i % TRACK_COLORS.length];
+          const programNum = parseInstrumentId(t.instrumentId);
+          const isPercussion = t.channel === 9;
+          const instLabel = isPercussion
+            ? 'Drum Kit (ch10)'
+            : programNum >= 0
+              ? `${programNum} · ${getGmName(programNum)}`
+              : '-';
+          const tooltip = `${i}: ${t.name || `Track ${i}`}\n${t.notes?.length ?? 0} notes · ch ${t.channel + 1}\n${instLabel}`;
           return (
             <li
               key={t.id}
@@ -50,7 +59,7 @@ export default function TrackSidebar({
               className={`cursor-pointer border-b transition-colors ${
                 isActive ? 'bg-blue-50 border-l-4 border-l-blue-600' : 'hover:bg-gray-100 border-l-4 border-l-transparent'
               }`}
-              title={collapsed ? `${i}: ${t.name} (${t.notes?.length ?? 0} notes)` : undefined}
+              title={tooltip}
             >
               {collapsed ? (
                 <div className="flex items-center justify-center py-2">
@@ -62,15 +71,18 @@ export default function TrackSidebar({
               ) : (
                 <div className="flex items-center gap-2 px-3 py-2">
                   <span
-                    className="w-3 h-3 rounded-sm flex-shrink-0"
+                    className="w-3 h-3 rounded-sm flex-shrink-0 mt-0.5"
                     style={{ background: color }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium text-gray-800 truncate">
                       {i}: {t.name || `Track ${i}`}
                     </div>
-                    <div className="text-[10px] text-gray-500">
-                      {t.notes?.length ?? 0} notes · ch {t.channel} · {t.instrumentId ?? '-'}
+                    <div className="text-[10px] text-gray-500 truncate">
+                      {t.notes?.length ?? 0} notes · ch {t.channel + 1}
+                    </div>
+                    <div className="text-[10px] text-gray-600 truncate" title={instLabel}>
+                      {instLabel}
                     </div>
                   </div>
                 </div>

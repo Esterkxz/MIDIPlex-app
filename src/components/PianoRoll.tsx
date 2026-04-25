@@ -125,17 +125,31 @@ export default function PianoRoll({
     [project.ppq, project.bpm],
   );
 
-  // 새 곡 로드 시 viewport 초기화 + 선택 해제 (activeTrack 은 page.tsx 가 owner)
+  // 새 곡 로드 시 viewport 리셋 — auto-fit 은 다음 effect 가 처리
+  const [autoFitDone, setAutoFitDone] = useState(false);
   useEffect(() => {
-    setScrollX(0);
-    setScrollY(Math.max(0, minPitch - 6));
-    const w = containerRef.current?.clientWidth ?? 800;
-    const fitScale = Math.max(MIN_X_SCALE, (w - KEY_LABEL_PX) / totalDuration);
-    setXScale(Math.min(fitScale, DEFAULT_X_SCALE));
     setSelection(new Set());
     setDragState(null);
+    setAutoFitDone(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
+
+  // 자동 fit — 새 곡 로드 + 컨테이너 측정 후 한 번 실행. 곡 전체가 가로 100%, 피치가 세로 95% 차지.
+  useEffect(() => {
+    if (autoFitDone) return;
+    if (containerSize.w <= 0 || containerSize.h <= 0) return;
+    if (allNotes.length === 0) return;
+    const w = containerSize.w - KEY_LABEL_PX;
+    const fitX = Math.max(MIN_X_SCALE, Math.min(MAX_X_SCALE, w / totalDuration));
+    setXScale(fitX);
+    setScrollX(0);
+    const pitchRange = Math.max(maxPitch - minPitch + 4, 12);
+    const targetH = (containerSize.h - HEADER_PX) * 0.95;
+    const fitPH = Math.max(MIN_PITCH_HEIGHT, Math.min(MAX_PITCH_HEIGHT, targetH / pitchRange));
+    setPitchHeight(fitPH);
+    setScrollY(Math.max(0, minPitch - 2));
+    setAutoFitDone(true);
+  }, [autoFitDone, containerSize.w, containerSize.h, allNotes.length, totalDuration, minPitch, maxPitch]);
 
   // ResizeObserver
   useLayoutEffect(() => {

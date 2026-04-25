@@ -29,6 +29,12 @@ export default function Home() {
   const [activeTrack, setActiveTrack] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Undo / Redo / Reset 히스토리 — 파일 로드 시점 = initial. 편집마다 past 에 push, future 비움.
+  const [initialProject, setInitialProject] = useState<ProjectState | null>(null);
+  const [past, setPast] = useState<ProjectState[]>([]);
+  const [future, setFuture] = useState<ProjectState[]>([]);
+  const HISTORY_LIMIT = 100;
+
   // ctx sampleRate 강제 (lesson 003)
   useEffect(() => {
     try {
@@ -114,6 +120,10 @@ export default function Home() {
     // 활성 트랙: 첫 노트 트랙
     const firstWithNotes = loadedProject.tracks.findIndex((t) => (t.notes?.length ?? 0) > 0);
     setActiveTrack(firstWithNotes < 0 ? 0 : firstWithNotes);
+    // 히스토리 초기화 — initial = 로드 시점
+    setInitialProject(loadedProject);
+    setPast([]);
+    setFuture([]);
   };
 
   const handleSoundFontLoaded = async (buffer: ArrayBuffer) => {
@@ -123,6 +133,14 @@ export default function Home() {
   };
 
   const handleProjectChange = (next: ProjectState) => {
+    if (project) {
+      setPast((p) => {
+        const np = [...p, project];
+        if (np.length > HISTORY_LIMIT) np.splice(0, np.length - HISTORY_LIMIT);
+        return np;
+      });
+      setFuture([]);
+    }
     setProject(next);
     if (!isPlaying) {
       try {
@@ -132,6 +150,58 @@ export default function Home() {
       }
     }
   };
+
+  const handleUndo = () => {
+    if (past.length === 0 || !project) return;
+    const prev = past[past.length - 1];
+    setPast((p) => p.slice(0, -1));
+    setFuture((f) => [...f, project]);
+    setProject(prev);
+    if (!isPlaying) {
+      try { engine.applyProject(prev); } catch (e) { console.warn('[page] undo applyProject:', e); }
+    }
+  };
+
+  const handleRedo = () => {
+    if (future.length === 0 || !project) return;
+    const next = future[future.length - 1];
+    setFuture((f) => f.slice(0, -1));
+    setPast((p) => [...p, project]);
+    setProject(next);
+    if (!isPlaying) {
+      try { engine.applyProject(next); } catch (e) { console.warn('[page] redo applyProject:', e); }
+    }
+  };
+
+  const handleReset = () => {
+    if (!initialProject || !project) return;
+    if (project === initialProject) return;
+    setPast((p) => [...p, project]);
+    setFuture([]);
+    setProject(initialProject);
+    if (!isPlaying) {
+      try { engine.applyProject(initialProject); } catch (e) { console.warn('[page] reset applyProject:', e); }
+    }
+  };
+
+  // 키보드 단축키 — Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [past, future, project, isPlaying]);
 
   const handlePlayToggle = async () => {
     if (!project) return;
@@ -175,6 +245,33 @@ export default function Home() {
             >
               {isPlaying ? '⏹ 정지' : '▶ 재생'}
             </button>
+
+            <div className="flex gap-1 items-center text-xs">
+              <button
+                onClick={handleUndo}
+                disabled={past.length === 0}
+                className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="실행 취소 (Ctrl+Z)"
+              >
+                ↶ Undo {past.length > 0 ? `(${past.length})` : ''}
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={future.length === 0}
+                className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="다시 실행 (Ctrl+Shift+Z / Ctrl+Y)"
+              >
+                ↷ Redo {future.length > 0 ? `(${future.length})` : ''}
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={!initialProject || project === initialProject}
+                className="px-2 py-1 border rounded hover:bg-orange-50 text-orange-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="처음 상태로 (파일 로드 시점)"
+              >
+                ⟲ 처음
+              </button>
+            </div>
 
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <span className="text-xs text-gray-500">볼륨</span>
