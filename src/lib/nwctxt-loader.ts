@@ -106,18 +106,28 @@ function parsePosToken(tok: string): { pos: number; accidental: number; isNatura
   return { pos, accidental: 0, isNatural: false };
 }
 
-/** Dur 토큰 ("Quarter,Dotted,Slur" 등) → tick 길이 (Slur/Tie 같은 비-duration 플래그 무시). */
-function parseDuration(durValue: string): number {
+/**
+ * Dur 토큰 ("Quarter,Dotted,Slur,Triplet=First" 등) → tick 길이 + flag 들.
+ * - Dotted: × 1.5
+ * - DblDotted: × 1.75
+ * - Triplet (또는 Triplet=First/End): × 2/3
+ * - Grace: 짧은 ornament — 시간 누적 안 함 (호출부에서 처리)
+ * - Slur/Tie/Accent/Staccato/Tenuto: duration 영향 없음
+ */
+function parseDuration(durValue: string): { ticks: number; isGrace: boolean } {
   const tokens = durValue.split(',').map((t) => t.trim());
   const baseTok = tokens[0] || 'Quarter';
   const base = DURATION_BASE[baseTok] ?? PPQ;
   let mult = 1;
+  let isGrace = false;
   for (const t of tokens.slice(1)) {
     if (t === 'Dotted') mult *= 1.5;
     else if (t === 'DblDotted') mult *= 1.75;
-    // Slur, Tie, Staccato, Accent 등은 duration 영향 없음 (또는 별도 처리)
+    else if (t === 'Triplet' || t.startsWith('Triplet=')) mult *= 2 / 3;
+    else if (t === 'Grace') isGrace = true;
+    // Slur, Tie, Staccato, Accent, Tenuto 등은 duration 영향 없음
   }
-  return Math.round(base * mult);
+  return { ticks: Math.round(base * mult), isGrace };
 }
 
 /** Key Signature 의 sharp/flat 적용 letter set. */
@@ -301,21 +311,21 @@ export function loadNwctxtFromText(
 
       case 'Rest': {
         if (!currentStaff) break;
-        const dur = parseDuration(props.Dur || 'Quarter');
-        currentStaff.currentTick += dur;
+        const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
+        // Grace rest 는 시간 안 차지 (실제로는 거의 없는 케이스)
+        if (!isGrace) currentStaff.currentTick += ticks;
         break;
       }
 
       case 'Note': {
         if (!currentStaff) break;
-        const dur = parseDuration(props.Dur || 'Quarter');
+        const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
         const posTok = props.Pos || '0';
         const { pos, accidental, isNatural } = parsePosToken(posTok);
         const clefBase = CLEF_BASE[currentStaff.clef] ?? CLEF_BASE.Treble;
         const { letter, octave: rawOctave } = posToLetterOctave(pos, clefBase);
         const octave = rawOctave + currentStaff.clefOctaveShift;
         let midi = midiFromLetter(letter, octave);
-        // accidental: 명시 > 마디 컨텍스트 > 키 시그너처
         const measureKey = `${letter}${octave}`;
         if (accidental !== 0 || isNatural) {
           midi += accidental;
@@ -327,22 +337,25 @@ export function loadNwctxtFromText(
         } else if (currentStaff.keyFlats.has(letter)) {
           midi -= 1;
         }
+        // Grace 는 시간 차지 안 함 — duration 짧게 (32nd) 으로 강제 + tick 누적 안 함
+        const noteDur = isGrace ? Math.max(PPQ / 8, 24) : ticks;
         currentStaff.notes.push({
           id: nextNoteId(),
           tick: currentStaff.currentTick,
-          durationTicks: dur,
+          durationTicks: noteDur,
           midi: Math.max(0, Math.min(127, midi)),
           velocity: 0.7,
         });
-        currentStaff.currentTick += dur;
+        if (!isGrace) currentStaff.currentTick += ticks;
         break;
       }
 
       case 'Chord': {
         if (!currentStaff) break;
-        const dur = parseDuration(props.Dur || 'Quarter');
+        const { ticks, isGrace } = parseDuration(props.Dur || 'Quarter');
         const posList = (props.Pos || '0').split(',');
         const clefBase = CLEF_BASE[currentStaff.clef] ?? CLEF_BASE.Treble;
+        const noteDur = isGrace ? Math.max(PPQ / 8, 24) : ticks;
         for (const posTok of posList) {
           const { pos, accidental, isNatural } = parsePosToken(posTok);
           const { letter, octave: rawOctave } = posToLetterOctave(pos, clefBase);
@@ -362,12 +375,12 @@ export function loadNwctxtFromText(
           currentStaff.notes.push({
             id: nextNoteId(),
             tick: currentStaff.currentTick,
-            durationTicks: dur,
+            durationTicks: noteDur,
             midi: Math.max(0, Math.min(127, midi)),
             velocity: 0.7,
           });
         }
-        currentStaff.currentTick += dur;
+        if (!isGrace) currentStaff.currentTick += ticks;
         break;
       }
 
