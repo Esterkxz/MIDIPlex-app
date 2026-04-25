@@ -11,6 +11,25 @@ import { nextNoteId } from './types/project';
 export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: ProjectState } {
   const midi = new Midi(buffer);
 
+  // 진단 로그 — @tonejs/midi 가 SMF 를 어떻게 트랙 분해했는지 확인
+  console.log(
+    `[midi-loader] parsed: ${midi.tracks.length} tracks, ` +
+      `ppq=${midi.header.ppq} duration=${midi.duration.toFixed(2)}s`,
+  );
+  midi.tracks.forEach((t, i) => {
+    const ccCount = Object.values(t.controlChanges ?? {}).reduce(
+      (s, arr) => s + ((arr as unknown[])?.length ?? 0),
+      0,
+    );
+    const pbCount = (t.pitchBends as unknown as { length: number } | undefined)?.length ?? 0;
+    console.log(
+      `  [track ${i}] name="${t.name ?? ''}" ch=${t.channel ?? '?'} ` +
+        `prog=${t.instrument?.number ?? '?'} (${t.instrument?.name ?? ''}) ` +
+        `family=${t.instrument?.family ?? '?'} percussion=${t.instrument?.percussion ?? false} ` +
+        `notes=${t.notes?.length ?? 0} cc=${ccCount} pb=${pbCount}`,
+    );
+  });
+
   // 한 번에 ProjectState 직렬화 — Note 의 getter 들을 명시 호출
   const project: ProjectState = {
     id: cryptoRandomId(),
@@ -27,6 +46,11 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
   };
+
+  console.log(
+    `[midi-loader] ProjectState ready: ${project.tracks.length} tracks, ` +
+      `total notes=${project.tracks.reduce((s, t) => s + (t.notes?.length ?? 0), 0)}`,
+  );
 
   return { midi, project };
 }
