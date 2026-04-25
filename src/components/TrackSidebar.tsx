@@ -17,7 +17,13 @@ type Props = {
   onVisibleChange: (next: Set<number>) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** 펼친 상태 폭 (px). 드래그로 조정 가능. */
+  width: number;
+  onWidthChange: (px: number) => void;
 };
+
+const MIN_WIDTH = 180;
+const MAX_WIDTH = 600;
 
 export default function TrackSidebar({
   tracks,
@@ -27,7 +33,30 @@ export default function TrackSidebar({
   onVisibleChange,
   collapsed,
   onToggleCollapsed,
+  width,
+  onWidthChange,
 }: Props) {
+  // 우측 가장자리 드래그로 폭 조정 (펼친 상태에서만)
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    if (collapsed) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    const onMove = (mv: MouseEvent) => {
+      const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + (mv.clientX - startX)));
+      onWidthChange(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   // 전체 체크박스 tristate 계산
   const allVisible = tracks.length > 0 && tracks.every((_, i) => visibleTracks.has(i));
   const noneVisible = tracks.every((_, i) => !visibleTracks.has(i));
@@ -58,10 +87,10 @@ export default function TrackSidebar({
 
   return (
     <aside
-      className={`flex flex-col border-r bg-gray-50 transition-all overflow-hidden ${
-        collapsed ? 'w-16' : 'w-72'
+      className={`flex flex-col border-r bg-gray-50 overflow-hidden relative ${
+        collapsed ? 'w-16 transition-all' : ''
       }`}
-      style={{ flexShrink: 0 }}
+      style={{ flexShrink: 0, width: collapsed ? undefined : width }}
     >
       <div className={`flex items-center justify-between border-b bg-white py-2 ${collapsed ? 'px-1 gap-1' : 'px-2 gap-2'}`}>
         {!collapsed ? (
@@ -176,6 +205,14 @@ export default function TrackSidebar({
           <li className="text-xs text-gray-400 px-3 py-4 text-center">트랙 없음</li>
         )}
       </ul>
+      {/* 우측 드래그 리사이즈 핸들 — 펼친 상태에서만 */}
+      {!collapsed && (
+        <div
+          onMouseDown={handleResizeMouseDown}
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 active:bg-blue-500"
+          title="드래그로 폭 조정"
+        />
+      )}
     </aside>
   );
 }

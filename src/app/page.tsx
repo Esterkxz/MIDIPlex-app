@@ -12,6 +12,8 @@ import { AudioEngine } from '@/lib/audio-engine';
 
 const VOLUME_KEY = 'midiplex.volume';
 const SIDEBAR_KEY = 'midiplex.sidebar.collapsed';
+const SIDEBAR_WIDTH_KEY = 'midiplex.sidebar.width';
+const DEFAULT_SIDEBAR_WIDTH = 288; // px (= w-72)
 const DEFAULT_VOLUME = 0.1;
 const DESIRED_SAMPLE_RATE = 48000; // lesson 003 — Windows 고급 오디오 device 의 비표준 rate (384kHz 등) 호환
 
@@ -28,6 +30,7 @@ export default function Home() {
   const [mode, setMode] = useState<'oscillator' | 'spessasynth'>('oscillator');
   const [activeTrack, setActiveTrack] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(DEFAULT_SIDEBAR_WIDTH);
   const [visibleTracks, setVisibleTracks] = useState<Set<number>>(new Set());
 
   // Undo / Redo / Reset 히스토리 — 파일 로드 시점 = initial. 편집마다 past 에 push, future 비움.
@@ -67,6 +70,11 @@ export default function Home() {
       }
       const sb = window.localStorage.getItem(SIDEBAR_KEY);
       if (sb === '1') setSidebarCollapsed(true);
+      const sw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      if (sw != null) {
+        const n = Number(sw);
+        if (Number.isFinite(n) && n >= 180 && n <= 600) setSidebarWidth(n);
+      }
     } catch {}
     setHydrated(true);
   }, []);
@@ -84,6 +92,13 @@ export default function Home() {
       window.localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? '1' : '0');
     } catch {}
   }, [sidebarCollapsed, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth, hydrated]);
 
   useEffect(() => {
     engine.setOnEnd(() => setIsPlaying(false));
@@ -331,6 +346,8 @@ export default function Home() {
               onVisibleChange={setVisibleTracks}
               collapsed={sidebarCollapsed}
               onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+              width={sidebarWidth}
+              onWidthChange={setSidebarWidth}
             />
             <section className="flex-1 min-w-0 p-2 flex flex-col">
               <PianoRoll
