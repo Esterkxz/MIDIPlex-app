@@ -9,19 +9,42 @@ import { nextNoteId } from './types/project';
  * 은 spread `{...n}` 에서 누락. 본 함수는 명시적으로 필요한 필드만 복사.
  */
 /**
- * 의미 있는 트랙 — 노트, ControlChange, PitchBend 중 하나라도 있는 트랙.
- * SMF format 1 은 보통 트랙 0 이 conductor (tempo/timeSig/marker 메타만), 다른 트랙들에
- * 노트가 들어가는 컨벤션. 또한 일부 DAW 가 미사용 빈 트랙 (이름만 있는 placeholder) 도
- * 출력. 이런 트랙들은 ProjectState 에서 제외하고 header 메타만 활용.
+ * 노트가 있는 트랙. ProjectState 의 음악 트랙으로 들어갈 후보.
+ * SMF format 1 은 보통 트랙 0 이 conductor 메타. 또한 일부 DAW (특히 한국 DAW류) 가
+ * 메타 트랙 (이름 + program change + volume/pan 만) ↔ 노트 트랙 페어 패턴으로 출력 —
+ * 빈 메타 트랙은 다음 노트 트랙에 이름을 전달한 후 제외.
  */
-function isMeaningfulTrack(t: Midi['tracks'][number]): boolean {
-  const notes = t.notes?.length ?? 0;
-  const cc = Object.values(t.controlChanges ?? {}).reduce(
-    (s, arr) => s + ((arr as unknown[])?.length ?? 0),
-    0,
-  );
-  const pb = (t.pitchBends as unknown as { length: number } | undefined)?.length ?? 0;
-  return notes > 0 || cc > 0 || pb > 0;
+function isNoteTrack(t: Midi['tracks'][number]): boolean {
+  return (t.notes?.length ?? 0) > 0;
+}
+
+/** 의미 있는 이름 — "Track N" / "" / 공백뿐 등 default 는 무시. */
+function getMeaningfulName(t: Midi['tracks'][number]): string | null {
+  const name = t.name?.trim() ?? '';
+  if (!name) return null;
+  if (/^track\s*\d+$/i.test(name)) return null;
+  return name;
+}
+
+/**
+ * 메타 트랙의 의미있는 이름을 다음 노트 트랙에 전달하고, 메타 트랙은 제외.
+ * 결과: 노트 트랙들만, 각자 가장 적절한 표시 이름 보유.
+ */
+function pairMetaToNoteTracks(
+  tracks: readonly Midi['tracks'][number][],
+): Array<{ track: Midi['tracks'][number]; suppliedName?: string }> {
+  const out: Array<{ track: Midi['tracks'][number]; suppliedName?: string }> = [];
+  let pendingName: string | undefined;
+  for (const t of tracks) {
+    if (isNoteTrack(t)) {
+      out.push({ track: t, suppliedName: pendingName });
+      pendingName = undefined;
+    } else {
+      const meta = getMeaningfulName(t);
+      if (meta) pendingName = meta;
+    }
+  }
+  return out;
 }
 
 export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: ProjectState } {
@@ -38,18 +61,18 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
       0,
     );
     const pbCount = (t.pitchBends as unknown as { length: number } | undefined)?.length ?? 0;
-    const meaningful = isMeaningfulTrack(t);
+    const note = isNoteTrack(t);
     console.log(
       `  [track ${i}] name="${t.name ?? ''}" ch=${t.channel ?? '?'} ` +
         `prog=${t.instrument?.number ?? '?'} (${t.instrument?.name ?? ''}) ` +
         `family=${t.instrument?.family ?? '?'} percussion=${t.instrument?.percussion ?? false} ` +
         `notes=${t.notes?.length ?? 0} cc=${ccCount} pb=${pbCount}` +
-        (meaningful ? '' : ' [SKIP empty]'),
+        (note ? '' : ' [META — name forwards to next note track]'),
     );
   });
 
-  // 빈 트랙 (conductor + DAW placeholder) 필터링 → 의미 있는 음악 트랙만 ProjectState 로
-  const meaningfulRaw = midi.tracks.filter(isMeaningfulTrack);
+  // 메타 트랙 (이름만 있고 노트 없음) 의 이름을 다음 노트 트랙으로 전달, 메타는 제외
+  const paired = pairMetaToNoteTracks(midi.tracks);
 
   const project: ProjectState = {
     id: cryptoRandomId(),
@@ -62,14 +85,16 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
     bpm: midi.header.tempos[0]?.bpm ?? 120,
     durationSeconds: midi.duration,
     instruments: extractInstruments(midi),
-    tracks: meaningfulRaw.map((t, i) => loadTrack(t, i, midi.header.ppq)),
+    tracks: paired.map((entry, i) =>
+      loadTrack(entry.track, i, midi.header.ppq, entry.suppliedName),
+    ),
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
   };
 
   console.log(
-    `[midi-loader] ProjectState ready: ${project.tracks.length} tracks ` +
-      `(filtered ${midi.tracks.length - project.tracks.length} empty), ` +
+    `[midi-loader] ProjectState ready: ${project.tracks.length} note tracks ` +
+      `(filtered ${midi.tracks.length - project.tracks.length} meta), ` +
       `total notes=${project.tracks.reduce((s, t) => s + (t.notes?.length ?? 0), 0)}`,
   );
 
@@ -79,14 +104,26 @@ export function loadMidiFromBuffer(buffer: ArrayBuffer): { midi: Midi; project: 
 function loadTrack(
   track: Midi['tracks'][number],
   index: number,
-  ppq: number,
+  _ppq: number,
+  suppliedName?: string,
 ): Track {
+  // 트랙 이름 우선순위:
+  //   1. 의미있는 자체 이름 (default "Track N" 아님)
+  //   2. 직전 메타 트랙에서 전달된 이름
+  //   3. 자체 이름 (default 라도)
+  //   4. fallback "Track {index}"
+  const ownName = track.name?.trim() ?? '';
+  const ownIsDefault = !ownName || /^track\s*\d+$/i.test(ownName);
+  const displayName = !ownIsDefault
+    ? ownName
+    : suppliedName ?? ownName ?? `Track ${index}`;
+
   return {
     id: `track-${index}`,
-    name: track.name || `Track ${index}`,
+    name: displayName || `Track ${index}`,
     kind: 'note',
     channel: track.channel ?? 0,
-    instrumentId: `instrument-${track.instrument.number}`,
+    instrumentId: `instrument-${track.instrument?.number ?? 0}`,
     // 명시 복사 — getter 결과 보존 (lesson 002)
     notes: track.notes.map(
       (n): Note => ({
