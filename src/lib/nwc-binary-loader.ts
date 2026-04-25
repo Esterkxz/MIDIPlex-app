@@ -19,6 +19,7 @@
 import { unzlibSync } from 'fflate';
 import type { ProjectState } from './types/project';
 import { loadNwctxtFromText } from './nwctxt-loader';
+import { parseV1Binary } from './nwc-v1-parser';
 
 const MAGIC_NWZ = '[NWZ]';
 const MAGIC_NOTE = '[Note';
@@ -77,11 +78,9 @@ export function loadNwcFromBuffer(
 
   // 4. 버전 분기
   if (header.version < 2.7) {
-    throw new Error(
-      `NWC ${header.version.toFixed(2)} (binary 1.x) 은 현재 지원 안 됨. 해결 방법:\n` +
-        `  1. NoteWorthy Composer 2.x 에서 파일을 열어 "Save As..." → 2.x 형식으로 저장\n` +
-        `  2. 또는 "File → Save As..." → "NoteWorthy Composer Clip Text (*.nwctxt)" 으로 export 후 .nwctxt 파일 import`,
-    );
+    // 1.x — 본격 binary parser 위임
+    console.log(`[nwc-binary-loader] dispatching to v1 parser (version ${header.version})`);
+    return parseV1Binary(bodyRaw, fileName);
   }
 
   // 5. 2.7+ — nwctext embedded 추출
