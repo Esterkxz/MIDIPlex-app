@@ -1,65 +1,187 @@
-import Image from "next/image";
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Midi } from '@tonejs/midi';
+import * as Tone from 'tone';
+import MidiUpload from '@/components/MidiUpload';
+import SoundFontUpload from '@/components/SoundFontUpload';
+import PianoRoll from '@/components/PianoRoll';
+import type { ProjectState } from '@/lib/types/project';
+import { AudioEngine } from '@/lib/audio-engine';
+
+const VOLUME_KEY = 'midiplex.volume';
+const DEFAULT_VOLUME = 0.1;
+const DESIRED_SAMPLE_RATE = 48000; // lesson 003 — Windows 고급 오디오 device 의 비표준 rate (384kHz 등) 호환
 
 export default function Home() {
+  const [project, setProject] = useState<ProjectState | null>(null);
+  // Midi 객체 보존 — 향후 편집 후 SMF 내보내기 + audio engine fallback 의 트랙 노트 직접 사용
+  const [, setMidi] = useState<Midi | null>(null);
+  const [engine] = useState(() => new AudioEngine());
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(DEFAULT_VOLUME);
+  const [hydrated, setHydrated] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [sfLoaded, setSfLoaded] = useState(false);
+  const [mode, setMode] = useState<'oscillator' | 'spessasynth'>('oscillator');
+
+  // ctx sampleRate 강제 (lesson 003)
+  useEffect(() => {
+    try {
+      const currentRate = Tone.getContext().rawContext.sampleRate;
+      if (currentRate !== DESIRED_SAMPLE_RATE) {
+        console.log(`[page] AudioContext sampleRate ${currentRate} → ${DESIRED_SAMPLE_RATE} 강제 변경`);
+        const ctx = new AudioContext({ sampleRate: DESIRED_SAMPLE_RATE });
+        Tone.setContext(ctx);
+      }
+    } catch (e) {
+      console.warn('[page] AudioContext sampleRate 강제 실패:', e);
+    }
+  }, []);
+
+  // 볼륨 hydration
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(VOLUME_KEY);
+      if (saved != null) {
+        const parsed = Number(saved);
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+          setVolume(parsed);
+        }
+      }
+    } catch {}
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(VOLUME_KEY, String(volume));
+    } catch {}
+  }, [volume, hydrated]);
+
+  useEffect(() => {
+    engine.setOnEnd(() => setIsPlaying(false));
+  }, [engine]);
+
+  useEffect(() => {
+    engine.setVolume(volume);
+  }, [engine, volume]);
+
+  // playhead RAF + sequencer 자동 종료 감지
+  useEffect(() => {
+    if (!isPlaying) {
+      setCurrentTime(0);
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      setCurrentTime(engine.getCurrentTime());
+      if (!engine.isPlayingNow()) {
+        setIsPlaying(false);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, engine]);
+
+  const handleMidiLoaded = (
+    loadedMidi: Midi,
+    loadedProject: ProjectState,
+    buffer: ArrayBuffer,
+    fileName: string,
+  ) => {
+    engine.stop();
+    setMidi(loadedMidi);
+    setProject(loadedProject);
+    engine.loadMidi(loadedMidi, buffer, fileName);
+    setIsPlaying(false);
+  };
+
+  const handleSoundFontLoaded = async (buffer: ArrayBuffer) => {
+    await engine.loadSoundFont(buffer);
+    setSfLoaded(engine.isSoundFontLoaded());
+    setMode(engine.getMode());
+  };
+
+  const handlePlayToggle = async () => {
+    if (!project) return;
+    if (isPlaying) {
+      engine.stop();
+      setIsPlaying(false);
+    } else {
+      await engine.play();
+      setIsPlaying(true);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main className="flex min-h-screen flex-col items-center p-8 gap-6 bg-white text-gray-900">
+      <header className="flex flex-col items-center gap-1">
+        <h1 className="text-3xl font-bold">MIDIPlex</h1>
+        <p className="text-sm text-gray-600">웹 MIDI 작곡 · 편곡 도구 (Phase 2 MVP 진행 중)</p>
+      </header>
+
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        <MidiUpload onLoaded={handleMidiLoaded} />
+        <SoundFontUpload onLoaded={handleSoundFontLoaded} loaded={sfLoaded} />
+      </div>
+
+      {project && (
+        <>
+          <div className="flex gap-6 items-center flex-wrap justify-center">
+            <button
+              onClick={handlePlayToggle}
+              className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+              {isPlaying ? '⏹ 정지' : '▶ 재생'}
+            </button>
+
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <span className="text-xs text-gray-500">볼륨</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(volume * 100)}
+                onChange={(e) => setVolume(Number(e.target.value) / 100)}
+                className="w-32"
+              />
+              <span className="w-10 text-right tabular-nums">{Math.round(volume * 100)}%</span>
+            </label>
+
+            <span className="text-xs px-2 py-1 rounded bg-gray-100 border">
+              모드: {mode === 'spessasynth' ? '🎹 SoundFont (spessasynth)' : '🌊 Oscillator (임시)'}
+            </span>
+
+            <span className="text-sm text-gray-600">
+              {project.title} · {project.tracks.length} 트랙 · {project.durationSeconds.toFixed(1)}s · BPM {project.bpm}
+            </span>
+          </div>
+
+          <PianoRoll project={project} currentTime={currentTime} />
+
+          <details className="text-sm text-gray-600 max-w-3xl w-full">
+            <summary className="cursor-pointer">트랙 정보</summary>
+            <ul className="mt-2 space-y-1 list-disc list-inside">
+              {project.tracks.map((t) => (
+                <li key={t.id}>
+                  {t.name} · {t.notes?.length ?? 0} notes · channel {t.channel} · instrument {t.instrumentId}
+                </li>
+              ))}
+            </ul>
+          </details>
+        </>
+      )}
+
+      <footer className="mt-8 text-xs text-gray-400 text-center">
+        Phase 2 MVP — M1 (업로드) · M2 (파싱) · M3 (피아노롤) · M4/M5 (재생 + 사운드폰트) — `MIDIPlex/.agent/PM/003_WBS.md`
+        <br />
+        ADR 0001 v1.1 + ADR 0006 + lesson 002·003·004 회피.
+      </footer>
+    </main>
   );
 }
