@@ -544,30 +544,53 @@ function skipPedal(reader: Reader, version: number) {
 
 function parseNoteToken(reader: Reader, staff: V1Staff, version: number) {
   const data = reader.readBytes(8);
-  appendNoteFromData(data, staff);
-  if (version < 1.7) reader.skip(2);
-  // stem length flag — byteMarking5 bit 6
+  // stem length flag (byteMarking5 bit 6) — parseNoteValue 안에서 처리됨, 8 byte 직후
   if (data[7] & 0x40) reader.readByte();
+  appendNoteFromData(data, staff);
+  // Note 만의 1.5 변종 skip(2) — Rest 에는 없음
+  if (version < 1.7) reader.skip(2);
 }
 
-function parseRestToken(reader: Reader, staff: V1Staff, version: number) {
+function parseRestToken(reader: Reader, staff: V1Staff, _version: number) {
   const data = reader.readBytes(8);
+  // stem length flag (byteMarking5 bit 6) — 1 byte 추가 read
+  if (data[7] & 0x40) reader.readByte();
   const dur = decodeNoteDuration(data);
   if (!dur.isGrace) staff.currentTick += dur.ticks;
-  if (version < 1.7) reader.skip(2);
 }
 
-function parseChordToken(reader: Reader, staff: V1Staff, version: number) {
-  // Chord = 10 bytes core + Note 들 (1.5 는 변종)
-  const _data = reader.readBytes(10);
-  // 단순화: 첫 10 bytes 무시 + 추가 노트 follow 패턴
-  // 실제로는 staff position 들을 갖고 있는데 정확한 layout 추가 분석 필요
-  // 일단 1 노트만 추가 시도 (data 의 일부 byte 가 8-byte-like 재사용?)
-  if (version < 1.7) {
+/**
+ * Chord layout (zz85 spec):
+ *   - 10 byte core ([0..9]) — data[8] = sub-note 수 (chords count)
+ *   - sub-note 마다: skip 1 + skip 2 + 8 byte note record (= 11 byte each)
+ *   - sub-note 의 position[6] 와 accidental[7] 가 실제 chord 노트들의 음정
+ *   - 모든 sub-note 는 같은 currentTick 에서 시작, duration 은 첫 sub-note 기준
+ *   - 1.5 변종: 첫 sub-note 시작 전 skip 1 + skip 2 (포함되어 있어 추가 처리 X)
+ */
+function parseChordToken(reader: Reader, staff: V1Staff, _version: number) {
+  const data = reader.readBytes(10);
+  const chordsCount = data[8];
+  const startTick = staff.currentTick;
+  let mainDur: { ticks: number; isGrace: boolean } | null = null;
+
+  for (let i = 0; i < chordsCount; i++) {
+    reader.skip(1);
     reader.skip(2);
+    const subData = reader.readBytes(8);
+    if (subData[7] & 0x40) reader.readByte(); // stem length flag
+    const dur = decodeNoteDuration(subData);
+    if (i === 0) mainDur = dur;
+
+    // sub-note 추가 — currentTick 누적 안 함 (모두 같은 시작 시간)
+    const savedTick = staff.currentTick;
+    appendNoteFromData(subData, staff);
+    staff.currentTick = savedTick; // appendNoteFromData 가 누적한 거 되돌림
   }
-  // chord 가 추가 sub-note 데이터를 갖는지 — walking 으로는 pass
-  // (이 부분은 follow-up 단계에서 정확한 spec 발견 필요)
+
+  // chord 전체의 시간 누적 — main duration 만큼
+  if (mainDur && !mainDur.isGrace) {
+    staff.currentTick = startTick + mainDur.ticks;
+  }
 }
 
 function decodeNoteDuration(data: Uint8Array): { ticks: number; isGrace: boolean } {
