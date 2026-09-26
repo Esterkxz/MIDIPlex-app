@@ -1,0 +1,17 @@
+# Next.js 월간 보안 릴리스 추종 (docs repo executive-docs/08 §5.2).
+# spessasynth_lib/_core 는 AudioWorklet processor 와 버전이 묶여 exact 고정이므로
+# 업데이트 PR 이 오면 postinstall 의 processor 재복사까지 확인하고 병합한다.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # TS7 은 typescript-eslint 미지원 — 6.x 에 고정 (08 §5.2)
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # ESLint 10 은 eslint-config-next 16.3 에서 크래시 — 결정 D5 대기
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]

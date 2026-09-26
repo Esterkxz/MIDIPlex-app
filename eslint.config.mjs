@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 빌드 산출물 — postinstall 이 복사하는 spessasynth processor 등
+    "public/**",
+    "spec/**/*.generated.js",
   ]),
 ]);
 

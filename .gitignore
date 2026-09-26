@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# peggy 생성 파서 (npm run peggy:mpx 로 재생성)
+spec/**/*.generated.js
+spec/**/*.generated.d.ts

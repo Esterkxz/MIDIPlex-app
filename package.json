@@ -6,26 +6,33 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "node scripts/copy-spessa-processor.mjs",
+    "peggy:mpx": "peggy --format es --dts -o spec/mpx/v0.1/grammar.generated.js spec/mpx/v0.1/grammar.peggy",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@tonejs/midi": "^2.0.28",
-    "fflate": "^0.8.2",
-    "next": "16.2.4",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "spessasynth_core": "^4.2.13",
-    "spessasynth_lib": "^4.2.15",
-    "tone": "^15.1.22"
+    "fflate": "0.8.3",
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "spessasynth_core": "4.3.22",
+    "spessasynth_lib": "4.3.14",
+    "tone": "15.1.22"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.4",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.6",
+    "peggy": "5.1.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
