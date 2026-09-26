@@ -17,6 +17,12 @@ import {
   type ProjectListEntry,
 } from '@/lib/storage/indexeddb-store';
 import { downloadSmf, projectToSmfBuffer } from '@/lib/midi-export';
+import {
+  configureAudioSession,
+  isStandaloneWebApp,
+  isWebKitStoragePolicy,
+  requestPersistentStorage,
+} from '@/lib/platform';
 
 const VOLUME_KEY = 'midiplex.volume';
 const SIDEBAR_KEY = 'midiplex.sidebar.collapsed';
@@ -53,9 +59,12 @@ export default function Home() {
   // M7 IndexedDB 저장 상태
   const [recentProjects, setRecentProjects] = useState<ProjectListEntry[]>([]);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  // Safari ITP — 영구 저장 미승인 + 홈 화면 앱 아님 → 7일 미사용 시 IndexedDB 삭제 위험 (08 §5.1)
+  const [storageAtRisk, setStorageAtRisk] = useState(false);
 
-  // ctx sampleRate 강제 (lesson 003)
+  // ctx sampleRate 강제 (lesson 003) + iOS 무음 스위치 대응 (audioSession 은 첫 AudioContext 생성 전에)
   useEffect(() => {
+    configureAudioSession();
     try {
       const currentRate = Tone.getContext().rawContext.sampleRate;
       if (currentRate !== DESIRED_SAMPLE_RATE) {
@@ -67,6 +76,26 @@ export default function Home() {
       console.warn('[page] AudioContext sampleRate 강제 실패:', e);
     }
   }, []);
+
+  // iOS 백그라운드 복귀 후 무음 대응 — 다시 보이면 컨텍스트 재개. 실패하면 다음 재생의 Tone.start() 가 재시도.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const ctx = Tone.getContext().rawContext as AudioContext;
+      if (ctx.state !== 'running' && ctx.state !== 'closed') {
+        ctx.resume().catch((e) => console.warn('[page] AudioContext resume 실패:', e));
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
+  // 첫 저장 시 영구 저장 요청 (Firefox 는 프롬프트를 띄우므로 로드 시점이 아니라 저장 시점)
+  const ensurePersistentStorage = () => {
+    requestPersistentStorage()
+      .then((ok) => setStorageAtRisk(!ok && isWebKitStoragePolicy() && !isStandaloneWebApp()))
+      .catch(() => {});
+  };
 
   // 볼륨 + 사이드바 hydration
   useEffect(() => {
@@ -229,6 +258,7 @@ export default function Home() {
         .then(() => {
           setSavedAt(new Date().toISOString());
           setIsDirty(false);
+          ensurePersistentStorage();
           // 최근 목록 갱신
           listProjects().then(setRecentProjects).catch(() => {});
         })
@@ -249,6 +279,7 @@ export default function Home() {
       await saveProject(project);
       setSavedAt(new Date().toISOString());
       setIsDirty(false);
+      ensurePersistentStorage();
       const list = await listProjects();
       setRecentProjects(list);
     } catch (e) {
@@ -423,6 +454,14 @@ export default function Home() {
               >
                 💾 저장 {isDirty ? '*' : ''}
               </button>
+              {storageAtRisk && (
+                <span
+                  className="text-[11px] text-amber-700 whitespace-nowrap"
+                  title="Safari 는 7일간 방문하지 않은 사이트의 저장 데이터를 지울 수 있습니다. 홈 화면에 추가하면 면제됩니다."
+                >
+                  ⚠ Safari: 7일 미사용 시 저장본 삭제 가능 — ⬇ .mid 로 백업
+                </span>
+              )}
 
               <details className="relative">
                 <summary className="cursor-pointer px-2 py-1 border rounded hover:bg-gray-50 list-none">

@@ -79,10 +79,7 @@ export class AudioEngine {
     const v = Math.round(Math.max(0, Math.min(1, velocity)) * 127);
     if (this.mode === 'spessasynth' && this.spessaSynth) {
       try {
-        const synth = this.spessaSynth as unknown as {
-          noteOn: (ch: number, midi: number, vel: number) => void;
-          noteOff: (ch: number, midi: number) => void;
-        };
+        const synth = this.spessaSynth;
         synth.noteOn(channel, midi, v);
         setTimeout(() => {
           try { synth.noteOff(channel, midi); } catch {}
@@ -187,15 +184,9 @@ export class AudioEngine {
     if (!this.sequencer && this.spessaSynth) {
       try {
         this.sequencer = new Sequencer(this.spessaSynth);
-        try {
-          (this.sequencer as unknown as {
-            eventHandler?: { addEvent?: (n: string, id: string, cb: () => void) => void };
-          }).eventHandler?.addEvent?.('songEnded', 'audio-engine', () => {
-            this.onEnd?.();
-          });
-        } catch {
-          // walking skeleton 패턴 — 이벤트 등록 실패 시 RAF polling fallback
-        }
+        this.sequencer.eventHandler.addEvent('songEnded', 'audio-engine', () => {
+          this.onEnd?.();
+        });
       } catch (e) {
         console.warn('[AudioEngine] Sequencer 생성 실패 — oscillator only:', e);
       }
