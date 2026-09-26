@@ -61,7 +61,7 @@ MIDIPlex-app/
 
 | 레이어 | 기술 |
 |----|----|
-| Frontend | Next.js 16+ (App Router) + TypeScript strict + Tailwind |
+| Frontend | Next.js 16.3 (App Router) + TypeScript 6.0 strict + Tailwind 4.3 — `typescript@latest`(7.x) 설치 금지: typescript-eslint 미지원 |
 | MIDI 파싱 | `@tonejs/midi` |
 | 스케줄링 | spessasynth_lib `Sequencer` (AudioWorklet 안 sample-accurate timing) — Tone.Transport 보조 |
 | 사운드폰트 합성 | `spessasynth_core` + `spessasynth_lib` (Apache-2.0) |

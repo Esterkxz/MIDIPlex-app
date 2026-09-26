@@ -2,7 +2,7 @@
 
 > **License: CC BY 4.0** ([LICENSE-CC-BY-4.0](../LICENSE-CC-BY-4.0))
 
-본 디렉토리는 MIDIPlex 의 신규 포맷 3종 spec 을 담는다. v1.0 freeze 후 별도 repo (`Esterkxz/MIDIPlex-formats`) 로 분리 예정 ([ADR 0004 단계 2](../../../OneDrive/Private%20Dev/Project/MIDIPlex/docs/adr/0004_Repo_Split_Strategy.md)).
+본 디렉토리는 MIDIPlex 의 신규 포맷 3종 spec 을 담는다. v1.0 freeze 후 별도 repo (`Esterkxz/MIDIPlex-formats`) 로 분리 예정 (docs repo `Esterkxz/MIDIPlex` (private) 의 `docs/adr/0004_Repo_Split_Strategy.md` 단계 2).
 
 ## 포맷
 

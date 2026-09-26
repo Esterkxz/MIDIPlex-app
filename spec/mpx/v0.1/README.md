@@ -1,7 +1,7 @@
 # MPX (MIDIPlex Markup) v0.1 — DRAFT
 
 > **License: CC BY 4.0** ([../../../LICENSE-CC-BY-4.0](../../../LICENSE-CC-BY-4.0))
-> **Status**: DRAFT (PM 007 Phase B 진행 예정)
+> **Status**: DRAFT (PM 007 Phase B 진행 중 — `grammar.peggy` 시제품 컴파일 가능, 2026-09-26)
 > **상위 리포트**: 본 docs repo `executive-docs/03_Markup_Language_Design.md` v1.2 ACCEPTED
 
 ## 빈 placeholder
@@ -20,7 +20,7 @@ PM 007 Phase B (DRAFT spec 작성) 시점에 본 디렉토리가 채워진다. �
 
 ## 다음 작업 (PM 007 Phase B)
 
-- [ ] EBNF / PEG 문법 정의
+- [x] EBNF / PEG 문법 정의 — [`grammar.peggy`](grammar.peggy). 2026-09-26 컴파일 불가 버그 2건 수정 (EOL 의 EOF 대안이 반복 안에서 무한 루프 · 줄 끝 `|` 미소비). 생성: `npm run peggy:mpx`
 - [ ] AST 타입 (TypeScript)
 - [ ] 예제 파일 ≥ 5개 (멜로디 / 코드 / 가사 / 다중 트랙 / 조변환)
 - [ ] Peggy 파서 시제품 (`../src/format/mpx/`)
