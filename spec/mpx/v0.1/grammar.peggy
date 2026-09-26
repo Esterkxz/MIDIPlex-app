@@ -101,8 +101,10 @@ Frontmatter
 FrontmatterBody
   = lines:FrontmatterLine* { return lines.join('\n'); }
 
+// 본문 줄은 반드시 Newline 으로 끝난다 (닫는 "---" 가 뒤따르므로). EOL 의 EOF 대안을 쓰면
+// 파일 끝에서 입력을 소비하지 않고 성공해 FrontmatterLine* 가 무한 루프 — peggy 가 컴파일 거부.
 FrontmatterLine
-  = !("---" EOL) chars:$([^\n\r]*) EOL { return chars; }
+  = !("---" EOL) chars:$([^\n\r]*) Newline { return chars; }
 
 // =============================================================================
 // 2. TRACK
@@ -157,8 +159,10 @@ TrackBodyLine
 TrackHeaderLookahead
   = "##" __ "track" _ ":"
 
+// Measure 는 닫는 "|" 를 lookahead 로만 확인해 다음 마디의 여는 "|" 로 공유한다.
+// 줄의 마지막 "|" 는 여기서 소비해야 한다 (헤더 주석의 Measure := "|" Cell* "|").
 MeasureLine
-  = _ measures:Measure+ _ trailing:LineComment? EOL {
+  = _ measures:Measure+ "|" _ trailing:LineComment? EOL {
       return {
         type: 'MeasureLine',
         measures: measures,
@@ -170,8 +174,11 @@ MeasureLine
 CommentLine
   = _ c:LineComment EOL { return { type: 'CommentLine', text: c, loc: loc() }; }
 
+// TrackBodyLine* 반복 안에서 쓰이므로 반드시 입력을 소비해야 한다:
+// 줄바꿈으로 끝나거나, 파일 끝이라면 공백이 1자 이상.
 BlankLine
-  = _ EOL { return null; }
+  = _ Newline { return null; }
+  / __ EOF { return null; }
 
 // =============================================================================
 // 3. MEASURE
@@ -378,10 +385,16 @@ __ = [ \t]+
 _nl = [ \t\n\r]+
 
 EOL
+  = Newline
+  / EOF
+
+Newline
   = "\r\n"
   / "\n"
   / "\r"
-  / !.
+
+EOF
+  = !.
 
 // =============================================================================
 // 향후 확장 (post-v0.1):
