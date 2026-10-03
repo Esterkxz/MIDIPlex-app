@@ -14,7 +14,7 @@
   "dependencies": {
     "@tonejs/midi": "^2.0.28",
     "fflate": "0.8.3",
-    "next": "16.3.6",
+    "next": "16.3.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "spessasynth_core": "4.3.22",
